@@ -1,0 +1,306 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+
+// Transaction filter section component
+function TransactionFilterSection({ transactions }) {
+  const [txFilterDate, setTxFilterDate] = useState('');
+  const [txFilterType, setTxFilterType] = useState('');
+  const [txFilterAmount, setTxFilterAmount] = useState('');
+
+  const filtered = transactions.filter(tx => {
+    const matchDate = txFilterDate ? tx.created_at.slice(0,10) === txFilterDate : true;
+    const matchType = txFilterType ? tx.type === txFilterType : true;
+    const matchAmount = txFilterAmount ? tx.amount >= Number(txFilterAmount) : true;
+    return matchDate && matchType && matchAmount;
+  });
+
+  return (
+    <div className="lg:col-span-2 bg-gray-50 p-4 rounded-lg">
+      <h4 className="font-semibold text-gray-900 mb-3">Tranzaksyon Resan yo</h4>
+      {/* Filter Controls */}
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input
+          type="date"
+          value={txFilterDate}
+          onChange={e => setTxFilterDate(e.target.value)}
+          className="border rounded px-2 py-1 text-sm"
+          placeholder="Filtre pa dat"
+        />
+        <select
+          value={txFilterType}
+          onChange={e => setTxFilterType(e.target.value)}
+          className="border rounded px-2 py-1 text-sm"
+        >
+          <option value="">Tout Tip</option>
+          <option value="depot">Depo</option>
+          <option value="retrait">Retrait</option>
+          <option value="transfert">Transfè</option>
+          <option value="peman">Peman</option>
+        </select>
+        <input
+          type="number"
+          min="0"
+          value={txFilterAmount}
+          onChange={e => setTxFilterAmount(e.target.value)}
+          className="border rounded px-2 py-1 text-sm"
+          placeholder="Montan min."
+        />
+      </div>
+      {/* Transactions List */}
+      <div className="space-y-4">
+        {filtered.map(tx => (
+          <div key={tx.id} className="bg-white p-4 rounded-lg shadow-sm">
+            <div className="flex justify-between items-start">
+              <div>
+                <div className="font-medium">{tx.description || 'Transaction'}</div>
+                <div className="text-sm text-gray-500">{new Date(tx.created_at).toLocaleDateString()}</div>
+              </div>
+              <div className={`font-medium ${tx.amount > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {tx.amount > 0 ? '+' : ''}{tx.amount} HTG
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function AdminDashboard() {
+  // All state declarations at the top
+  const [activeTab, setActiveTab] = useState('overview');
+  const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [legacyImg, setLegacyImg] = useState<string | null>(null);
+  const [showCreateUser, setShowCreateUser] = useState(false);
+  const [createdStart, setCreatedStart] = useState('');
+  const [createdEnd, setCreatedEnd] = useState('');
+  const [showAgentDetails, setShowAgentDetails] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<any>(null);
+  const [agentSearchQuery, setAgentSearchQuery] = useState('');
+  const [agentFilterStatus, setAgentFilterStatus] = useState('all');
+  
+  // User creation modal state
+  const [newUser, setNewUser] = useState({
+    username: '',
+    email: '',
+    password: '',
+    first_name: '',
+    last_name: '',
+    phone: '',
+    country: '',
+    countryCode: '',
+    areaCode: '',
+    date_of_birth: '',
+    city: '',
+    residenceCountry: '',
+    address: '',
+    id_document_type: '',
+    id_document_number: '',
+    id_document_front: null,
+    id_document_back: null,
+  });
+
+  // Keep all your existing state and functions here...
+
+  return (
+    <div className="flex h-screen bg-gray-100">
+      {/* Navigation Sidebar */}
+      <div className="w-64 bg-white border-r border-gray-200 pt-5 pb-4 flex flex-col">
+        <div className="flex items-center flex-shrink-0 px-4">
+          <h1 className="text-xl font-semibold text-gray-900">Cash Ti Machann</h1>
+        </div>
+        <nav className="mt-5 flex-1 px-2 bg-white space-y-1">
+          {/* Dashboard Overview */}
+          <div className="mb-4">
+            <button
+              onClick={() => setActiveTab('overview')}
+              className={`${
+                activeTab === 'overview'
+                  ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              } group w-full flex items-center px-2 py-2 text-sm font-medium`}
+            >
+              Apèsi Jeneral
+            </button>
+          </div>
+
+          {/* User Management Section */}
+          <div className="mb-4">
+            <h3 className="px-3 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Jesyon Itilizatè
+            </h3>
+            <div className="space-y-1">
+              <button
+                onClick={() => setActiveTab('clients')}
+                className={`${
+                  activeTab === 'clients'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Kliyan yo
+              </button>
+              <button
+                onClick={() => setActiveTab('merchants')}
+                className={`${
+                  activeTab === 'merchants'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Ti Machann yo
+              </button>
+              <button
+                onClick={() => setActiveTab('agents')}
+                className={`${
+                  activeTab === 'agents'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Ajan yo
+              </button>
+              <button
+                onClick={() => setActiveTab('enterprises')}
+                className={`${
+                  activeTab === 'enterprises'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Antrepriz yo
+              </button>
+            </div>
+          </div>
+
+          {/* Transaction Management */}
+          <div className="mb-4">
+            <h3 className="px-3 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Jesyon Tranzaksyon
+            </h3>
+            <div className="space-y-1">
+              <button
+                onClick={() => setActiveTab('transactions')}
+                className={`${
+                  activeTab === 'transactions'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Tranzaksyon yo
+              </button>
+              <button
+                onClick={() => setActiveTab('withdrawals')}
+                className={`${
+                  activeTab === 'withdrawals'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Retrait yo
+              </button>
+              <button
+                onClick={() => setActiveTab('deposits')}
+                className={`${
+                  activeTab === 'deposits'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Depo yo
+              </button>
+            </div>
+          </div>
+
+          {/* System Management */}
+          <div className="mb-4">
+            <h3 className="px-3 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Jesyon Sistèm
+            </h3>
+            <div className="space-y-1">
+              <button
+                onClick={() => setActiveTab('documents')}
+                className={`${
+                  activeTab === 'documents'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Dokiman yo
+              </button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className={`${
+                  activeTab === 'settings'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Paramèt yo
+              </button>
+              <button
+                onClick={() => setActiveTab('reports')}
+                className={`${
+                  activeTab === 'reports'
+                    ? 'bg-red-50 text-red-700 border-l-4 border-red-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                } group w-full flex items-center pl-8 pr-2 py-2 text-sm font-medium`}
+              >
+                Rapò yo
+              </button>
+            </div>
+          </div>
+        </nav>
+      </div>
+
+      <main className="flex-1 min-h-0 overflow-y-auto p-4 lg:p-8 pb-24 lg:pb-8">
+        {/* Overview Tab */}
+        {activeTab === 'overview' && (
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Apèsi Jeneral</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+              {/* Stats Grid */}
+              <div className="bg-white p-6 rounded-lg shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-gray-500 text-sm">Total Itilizatè</h3>
+                  <span className="bg-blue-100 text-blue-800 text-xs px-2.5 py-0.5 rounded-full">24h</span>
+                </div>
+                <p className="text-2xl font-bold text-gray-900">1,257</p>
+                <p className="text-sm text-green-600 mt-2">+12% depi yè</p>
+              </div>
+
+              {/* Keep all your existing dashboard content here... */}
+            </div>
+
+            {/* Recent Activity and Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Recent Transactions */}
+              <TransactionFilterSection transactions={[
+                { id: 1, description: "Depo - Jean Pierre", amount: 5000, created_at: "2025-09-15T10:30:00", type: "depot" },
+                { id: 2, description: "Retrait - Marie Paul", amount: -2000, created_at: "2025-09-15T11:15:00", type: "retrait" },
+                { id: 3, description: "Transfè - Rose Michel", amount: 3000, created_at: "2025-09-15T12:00:00", type: "transfert" }
+              ]} />
+
+              {/* Keep your existing activity sections here... */}
+            </div>
+          </div>
+        )}
+
+        {/* Clients Tab */}
+        {activeTab === 'clients' && (
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Jesyon Kliyan</h2>
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              {/* Your existing client management content or new content */}
+            </div>
+          </div>
+        )}
+
+        {/* Add all your other tab contents here, preserving any existing functionality */}
+        
+        {/* Keep all your existing modals here */}
+      </main>
+    </div>
+  );
+}

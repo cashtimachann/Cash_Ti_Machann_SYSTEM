@@ -1,0 +1,16 @@
+# Handle line endings
+* text=auto eol=lf
+
+# Treat certain files as binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.ico binary
+*.mp4 binary
+*.mov binary
+*.keystore binary
+
+# Linguist overrides (optional)
+docs/** linguist-documentation
