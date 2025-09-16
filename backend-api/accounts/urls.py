@@ -14,7 +14,6 @@ urlpatterns = [
     path('login/', views.LoginView.as_view(), name='login'),
     path('logout/', views.LogoutView.as_view(), name='logout'),
     path('profile/', views.ProfileView.as_view(), name='profile'),
-    path('change-password/', views.ChangePasswordView.as_view(), name='change_password'),
     
     # User verification
     path('verify-email/', views.VerifyEmailView.as_view(), name='verify_email'),
@@ -49,4 +48,31 @@ urlpatterns = [
     path('admin/dashboard-stats/', views.AdminDashboardStatsView.as_view(), name='admin_dashboard_stats'),
     # Admin dashboard recent activity
     path('admin/recent-activity/', views.AdminRecentActivityView.as_view(), name='admin_recent_activity'),
+    
+    # User search for transfers
+    path('users/search/', views.search_users, name='search_users'),
+    
+    # PIN management
+    path('pin/set/', views.set_transaction_pin, name='set_transaction_pin'),
+    path('pin/verify/', views.verify_transaction_pin, name='verify_transaction_pin'),
+    path('pin/status/', views.pin_status, name='pin_status'),
+    
+    # QR Code payments
+    path('qr/generate/', views.generate_qr_code, name='generate_qr_code'),
+    path('qr/process/', views.process_qr_payment, name='process_qr_payment'),
+    
+    # Security features
+    path('security/enable-2fa/', views.enable_2fa, name='enable_2fa'),
+    path('security/verify-2fa/', views.verify_2fa, name='verify_2fa'),
+    path('security/overview/', views.security_overview, name='security_overview'),
+    
+    # Profile management
+    path('update-email/', views.update_email, name='update_email'),
+    path('update-phone/', views.update_phone, name='update_phone'),
+    path('change-password/', views.change_password, name='change_password'),
+    path('upload-photo/', views.upload_profile_photo, name='upload_profile_photo'),
+    
+    # Language management
+    path('update-language/', views.update_language, name='update_language'),
+    path('user-language/', views.get_user_language, name='get_user_language'),
 ]

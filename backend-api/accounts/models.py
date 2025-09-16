@@ -77,9 +77,61 @@ class UserProfile(models.Model):
     phone_verification_code = models.CharField(max_length=6, null=True, blank=True)
     is_phone_verified = models.BooleanField(default=False)
     
+    # PIN for transactions
+    transaction_pin = models.CharField(max_length=128, null=True, blank=True)  # Hashed PIN
+    pin_attempts = models.IntegerField(default=0)
+    pin_locked_until = models.DateTimeField(null=True, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_password_reset_requested = models.DateTimeField(null=True, blank=True)
+    
+    # Profile picture
+    profile_picture = models.ImageField(upload_to='profile_pictures/', null=True, blank=True)
+    
+    # Language preference
+    LANGUAGE_CHOICES = (
+        ('kreyol', 'Kreyòl Ayisyen'),
+        ('french', 'Français'),
+        ('english', 'English'),
+        ('spanish', 'Español'),
+    )
+    preferred_language = models.CharField(max_length=20, choices=LANGUAGE_CHOICES, default='kreyol')
+    
+    def set_pin(self, pin):
+        """Set the transaction PIN (hashed)"""
+        from django.contrib.auth.hashers import make_password
+        self.transaction_pin = make_password(pin)
+        self.pin_attempts = 0
+        self.pin_locked_until = None
+        self.save()
+    
+    def check_pin(self, pin):
+        """Check if the provided PIN is correct"""
+        from django.contrib.auth.hashers import check_password
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Check if PIN is locked
+        if self.pin_locked_until and timezone.now() < self.pin_locked_until:
+            return False, "PIN locked due to too many attempts"
+        
+        # Check PIN
+        if self.transaction_pin and check_password(pin, self.transaction_pin):
+            self.pin_attempts = 0
+            self.pin_locked_until = None
+            self.save()
+            return True, "PIN correct"
+        else:
+            self.pin_attempts += 1
+            if self.pin_attempts >= 3:
+                self.pin_locked_until = timezone.now() + timedelta(minutes=15)
+            self.save()
+            return False, f"Wrong PIN. {3 - self.pin_attempts} attempts remaining"
+    
+    def has_pin(self):
+        """Check if user has set a PIN"""
+        return bool(self.transaction_pin)
     
     def __str__(self):
         return f"{self.first_name} {self.last_name}"

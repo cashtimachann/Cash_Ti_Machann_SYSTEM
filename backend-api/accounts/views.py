@@ -2,7 +2,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import User, IdentityDocument
+from rest_framework.decorators import api_view, permission_classes
+from .models import User, IdentityDocument, UserProfile
 from transactions.models import Transaction
 
 class AdminRecentActivityView(APIView):
@@ -2319,3 +2320,580 @@ class RequestVerificationView(APIView):
             return Response({
                 'error': f'Erè nan demand verifikasyon an: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def search_users(request):
+    """Search for users by name or phone number for money transfers"""
+    query = request.GET.get('q', '').strip()
+    
+    if len(query) < 3:
+        return Response([])
+    
+    # Search by first name, last name, username, or phone number
+    users = User.objects.filter(
+        Q(first_name__icontains=query) |
+        Q(last_name__icontains=query) |
+        Q(username__icontains=query) |
+        Q(phone_number__icontains=query),
+        user_type='client',  # Only allow transfers to clients
+        is_active=True
+    ).exclude(
+        id=request.user.id  # Exclude current user
+    )[:10]  # Limit to 10 results
+    
+    results = []
+    for user in users:
+        results.append({
+            'id': user.id,
+            'first_name': user.first_name or '',
+            'last_name': user.last_name or '',
+            'username': user.username,
+            'phone_number': user.phone_number or '',
+            'user_type': user.user_type
+        })
+    
+    return Response(results)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def set_transaction_pin(request):
+    """Set or change transaction PIN"""
+    pin = request.data.get('pin', '').strip()
+    
+    if not pin:
+        return Response({'error': 'PIN obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    if len(pin) < 4 or len(pin) > 6:
+        return Response({'error': 'PIN dwe gen 4-6 chif'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    if not pin.isdigit():
+        return Response({'error': 'PIN dwe gen sèlman chif'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        profile = request.user.profile
+        profile.set_pin(pin)
+        return Response({'message': 'PIN konfigire ak siksè'})
+    except Exception as e:
+        return Response({'error': f'Erè nan konfigirasyon PIN: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_transaction_pin(request):
+    """Verify transaction PIN without performing any transaction"""
+    pin = request.data.get('pin', '').strip()
+    
+    if not pin:
+        return Response({'error': 'PIN obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        profile = request.user.profile
+        if not profile.has_pin():
+            return Response({'error': 'Ou pa gen PIN. Tanpri kreye yon PIN'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        pin_valid, pin_message = profile.check_pin(pin)
+        if pin_valid:
+            return Response({'message': 'PIN correct'})
+        else:
+            return Response({'error': pin_message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response({'error': f'Erè nan verifikasyon PIN: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pin_status(request):
+    """Check if user has set a PIN"""
+    try:
+        profile = request.user.profile
+        return Response({
+            'has_pin': profile.has_pin(),
+            'pin_attempts': profile.pin_attempts,
+            'pin_locked': bool(profile.pin_locked_until and profile.pin_locked_until > timezone.now()) if profile.pin_locked_until else False
+        })
+    except Exception as e:
+        return Response({'error': f'Erè nan estatistik PIN: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_qr_code(request):
+    """Generate QR code for receiving money"""
+    try:
+        amount = request.data.get('amount', '')
+        description = request.data.get('description', '')
+        
+        # Create QR code data
+        qr_data = {
+            'type': 'payment_request',
+            'user_id': str(request.user.id),
+            'phone': request.user.phone_number,
+            'name': f"{request.user.first_name} {request.user.last_name}".strip(),
+            'amount': amount,
+            'description': description,
+            'timestamp': timezone.now().isoformat()
+        }
+        
+        import json
+        qr_string = json.dumps(qr_data)
+        
+        return Response({
+            'qr_data': qr_string,
+            'display_info': {
+                'name': qr_data['name'],
+                'phone': qr_data['phone'],
+                'amount': amount,
+                'description': description
+            }
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan kreyasyon kòd QR: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def process_qr_payment(request):
+    """Process payment from scanned QR code"""
+    try:
+        qr_data = request.data.get('qr_data', '')
+        pin = request.data.get('pin', '')
+        
+        if not qr_data or not pin:
+            return Response({'error': 'Done QR ak PIN obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Parse QR data
+        import json
+        try:
+            payment_info = json.loads(qr_data)
+        except:
+            return Response({'error': 'Kòd QR pa valid'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if payment_info.get('type') != 'payment_request':
+            return Response({'error': 'Tip kòd QR pa bon'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get receiver
+        try:
+            receiver = User.objects.get(id=payment_info['user_id'])
+        except User.DoesNotExist:
+            return Response({'error': 'Moun ki ap resevwa a pa jwenn'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Validate PIN
+        sender_profile = request.user.profile
+        if not sender_profile.has_pin():
+            return Response({'error': 'Ou pa gen PIN'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        pin_valid, pin_message = sender_profile.check_pin(pin)
+        if not pin_valid:
+            return Response({'error': pin_message}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Process payment
+        amount = Decimal(str(payment_info.get('amount', 0)))
+        if amount <= 0:
+            return Response({'error': 'Montan pa valid'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check balance
+        sender_wallet = request.user.wallet
+        fee = amount * Decimal('0.01')
+        total_amount = amount + fee
+        
+        if sender_wallet.balance < total_amount:
+            return Response({'error': 'Ou pa gen ase lajan'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create transaction
+        from transactions.models import Transaction
+        import uuid
+        transaction = Transaction.objects.create(
+            transaction_type='send',
+            sender=request.user,
+            receiver=receiver,
+            amount=amount,
+            fee=fee,
+            total_amount=total_amount,
+            reference_number=f"QR{uuid.uuid4().hex[:8].upper()}",
+            description=f"QR Payment: {payment_info.get('description', '')}",
+            status='completed'
+        )
+        
+        # Update wallets
+        sender_wallet.balance -= total_amount
+        sender_wallet.save()
+        
+        receiver_wallet = receiver.wallet
+        receiver_wallet.balance += amount
+        receiver_wallet.save()
+        
+        transaction.processed_at = timezone.now()
+        transaction.save()
+        
+        return Response({
+            'message': 'Peman QR reisi!',
+            'reference_number': transaction.reference_number,
+            'amount': float(amount),
+            'receiver': f"{receiver.first_name} {receiver.last_name}",
+            'fee': float(fee)
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan peman QR: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def enable_2fa(request):
+    """Enable two-factor authentication"""
+    try:
+        # For demo purposes, we'll use a simple email-based 2FA
+        # In production, you'd use TOTP (Google Authenticator) or SMS
+        
+        profile = request.user.profile
+        
+        # Generate a verification code
+        import random
+        import string
+        verification_code = ''.join(random.choices(string.digits, k=6))
+        
+        # Store the code temporarily (in production, use a proper 2FA system)
+        profile.email_verification_code = verification_code
+        profile.save()
+        
+        # In production, send this code via email or show QR for authenticator app
+        return Response({
+            'message': '2FA konfigire. Kòd konfimo: ' + verification_code,
+            'code': verification_code  # Only for demo - remove in production
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan konfigirasyon 2FA: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_2fa(request):
+    """Verify 2FA code"""
+    try:
+        code = request.data.get('code', '').strip()
+        
+        if not code:
+            return Response({'error': 'Kòd 2FA obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        profile = request.user.profile
+        
+        if profile.email_verification_code == code:
+            # In production, you'd enable 2FA permanently here
+            profile.email_verification_code = None
+            profile.save()
+            
+            # Record security activity
+            from .models import SecurityActivity
+            SecurityActivity.objects.create(
+                user=request.user,
+                event_type='two_factor_enabled',
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT'),
+                metadata={'enabled_at': timezone.now().isoformat()}
+            )
+            
+            return Response({'message': '2FA aktive ak siksè!'})
+        else:
+            return Response({'error': 'Kòd 2FA pa bon'}, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        return Response({'error': f'Erè nan verifikasyon 2FA: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def security_overview(request):
+    """Get security overview for user"""
+    try:
+        profile = request.user.profile
+        
+        # Get recent security activities
+        recent_activities = request.user.security_activities.all()[:10]
+        activities_data = []
+        for activity in recent_activities:
+            activities_data.append({
+                'event_type': activity.event_type,
+                'timestamp': activity.timestamp.isoformat(),
+                'ip_address': activity.ip_address,
+                'user_agent': activity.user_agent[:100] if activity.user_agent else None
+            })
+        
+        return Response({
+            'has_pin': profile.has_pin(),
+            'pin_locked': bool(profile.pin_locked_until and profile.pin_locked_until > timezone.now()) if profile.pin_locked_until else False,
+            'email_verified': profile.is_email_verified,
+            'phone_verified': profile.is_phone_verified,
+            'two_factor_enabled': False,  # Placeholder for real 2FA
+            'recent_activities': activities_data,
+            'device_info': {
+                'current_ip': request.META.get('REMOTE_ADDR'),
+                'user_agent': request.META.get('HTTP_USER_AGENT')
+            }
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan apèsi sekirite: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def update_email(request):
+    """Update user email address"""
+    try:
+        email = request.data.get('email', '').strip()
+        
+        if not email:
+            return Response({'error': 'Email obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validate email format
+        from django.core.validators import validate_email
+        from django.core.exceptions import ValidationError
+        try:
+            validate_email(email)
+        except ValidationError:
+            return Response({'error': 'Fòma email pa valab'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if email already exists
+        if User.objects.filter(email=email).exclude(id=request.user.id).exists():
+            return Response({'error': 'Email deja egziste'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update email
+        request.user.email = email
+        request.user.save()
+        
+        # Reset email verification
+        try:
+            profile = request.user.userprofile
+            profile.is_email_verified = False
+            profile.save()
+        except:
+            pass
+        
+        return Response({
+            'success': True,
+            'message': 'Email mizajou ak siksè',
+            'email': email
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan mizajou email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def update_phone(request):
+    """Update user phone number"""
+    try:
+        phone = request.data.get('phone', '').strip()
+        
+        if not phone:
+            return Response({'error': 'Nimewo telefòn obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Basic phone validation
+        import re
+        if not re.match(r'^\+?509\d{8}$', phone.replace(' ', '').replace('-', '')):
+            return Response({'error': 'Nimewo telefòn pa valab (dwe kòmanse ak +509)'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if phone already exists
+        if User.objects.filter(phone=phone).exclude(id=request.user.id).exists():
+            return Response({'error': 'Nimewo telefòn deja egziste'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update phone
+        request.user.phone = phone
+        request.user.save()
+        
+        # Reset phone verification
+        try:
+            profile = request.user.userprofile
+            profile.is_phone_verified = False
+            profile.save()
+        except:
+            pass
+        
+        return Response({
+            'success': True,
+            'message': 'Nimewo telefòn mizajou ak siksè',
+            'phone': phone
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan mizajou telefòn: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    """Change user password"""
+    try:
+        current_password = request.data.get('current_password', '')
+        new_password = request.data.get('new_password', '')
+        
+        if not current_password or not new_password:
+            return Response({'error': 'Tout modpas yo obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verify current password
+        if not request.user.check_password(current_password):
+            return Response({'error': 'Modpas aktyèl la pa kòrèk'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validate new password strength
+        if len(new_password) < 8:
+            return Response({'error': 'Nouvo modpas la dwe gen omwen 8 karaktè'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Change password
+        request.user.set_password(new_password)
+        request.user.save()
+        
+        # Log password change activity
+        try:
+            from .models import SecurityActivity
+            SecurityActivity.objects.create(
+                user=request.user,
+                activity_type='password_change',
+                description='Modpas chanje',
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT')
+            )
+        except:
+            pass
+        
+        return Response({
+            'success': True,
+            'message': 'Modpas chanje ak siksè'
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan chanjman modpas: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_profile_photo(request):
+    """Upload user profile photo"""
+    try:
+        if 'profile_picture' not in request.FILES:
+            return Response({'error': 'Foto obligatwa'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        profile_picture = request.FILES['profile_picture']
+        
+        # Validate file size (max 5MB)
+        if profile_picture.size > 5 * 1024 * 1024:
+            return Response({'error': 'Foto twò gwo (maksimòm 5MB)'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validate file type
+        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif']
+        if profile_picture.content_type not in allowed_types:
+            return Response({'error': 'Tip fichye pa valab (sèlman JPEG, PNG, GIF)'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get or create user profile
+        try:
+            profile = request.user.userprofile
+        except:
+            from .models import UserProfile
+            profile = UserProfile.objects.create(user=request.user)
+        
+        # Save the profile picture
+        profile.profile_picture = profile_picture
+        profile.save()
+        
+        return Response({
+            'success': True,
+            'message': 'Foto profil chanje ak siksè',
+            'profile_picture_url': profile.profile_picture.url if profile.profile_picture else None
+        })
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan chanjman foto: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def update_language(request):
+    """Update user language preference"""
+    try:
+        language = request.data.get('language', '').strip()
+        
+        # Validate language choice
+        valid_languages = ['kreyol', 'french', 'english', 'spanish']
+        if language not in valid_languages:
+            return Response({'error': 'Lang pa valab'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get or create user profile
+        try:
+            profile = request.user.userprofile
+        except (UserProfile.DoesNotExist, AttributeError):
+            # Handle both missing profile and missing relationship
+            profile, created = UserProfile.objects.get_or_create(
+                user=request.user,
+                defaults={
+                    'first_name': request.user.first_name or '',
+                    'last_name': request.user.last_name or ''
+                }
+            )
+        
+        # Update language preference
+        profile.preferred_language = language
+        profile.save()
+        
+        # Language names mapping
+        language_names = {
+            'kreyol': 'Kreyòl Ayisyen',
+            'french': 'Français', 
+            'english': 'English',
+            'spanish': 'Español'
+        }
+        
+        return Response({
+            'success': True,
+            'message': f'Lang chanje nan {language_names.get(language, language)}',
+            'language': language,
+            'language_display': language_names.get(language, language)
+        })
+        
+    except Exception as e:
+        # Add more detailed error logging
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error in update_language: {error_details}")
+        return Response({'error': f'Erè nan chanjman lang: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_user_language(request):
+    """Get user's current language preference"""
+    try:
+        # Get user profile
+        try:
+            profile = request.user.userprofile
+            language = profile.preferred_language or 'kreyol'
+        except (UserProfile.DoesNotExist, AttributeError):
+            # Try to get profile directly if relationship doesn't work
+            try:
+                profile = UserProfile.objects.get(user=request.user)
+                language = profile.preferred_language or 'kreyol'
+            except UserProfile.DoesNotExist:
+                language = 'kreyol'  # Default language
+        
+        # Language names mapping
+        language_names = {
+            'kreyol': 'Kreyòl Ayisyen',
+            'french': 'Français',
+            'english': 'English', 
+            'spanish': 'Español'
+        }
+        
+        return Response({
+            'language': language,
+            'language_display': language_names.get(language, 'Kreyòl Ayisyen'),
+            'available_languages': [
+                {'code': 'kreyol', 'name': 'Kreyòl Ayisyen', 'flag': '🇭🇹'},
+                {'code': 'french', 'name': 'Français', 'flag': '🇫🇷'},
+                {'code': 'english', 'name': 'English', 'flag': '🇺🇸'},
+                {'code': 'spanish', 'name': 'Español', 'flag': '🇪🇸'}
+            ]
+        })
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error in get_user_language: {error_details}")
+        return Response({'error': f'Erè nan rechèch lang: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
