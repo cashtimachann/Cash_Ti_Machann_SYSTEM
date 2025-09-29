@@ -1877,23 +1877,23 @@ export default function ClientDashboard() {
               </div>
 
               {/* Enhanced Balance Card - Classic Size */}
-              <div className="bg-gradient-to-br from-black via-gray-900 to-black rounded-xl p-5 lg:p-6 text-white mb-6 relative overflow-hidden shadow-lg">
+              <div className="bg-gradient-to-br from-green-600 via-green-700 to-green-800 rounded-xl p-5 lg:p-6 text-white mb-6 relative overflow-hidden shadow-lg">
                 <div className="relative z-10">
-                  <p className="text-gray-300 text-xs font-medium mb-2 uppercase tracking-wider">
+                  <p className="text-green-100 text-xs font-medium mb-2 uppercase tracking-wider">
                     Balans Wallet Ou
                   </p>
                   <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-1 tracking-tight">
                     {userData?.wallet?.balance ?? 0}
                   </div>
-                  <p className="text-gray-200 text-base font-medium">
+                  <p className="text-green-50 text-base font-medium">
                     {userData?.wallet?.currency ?? 'HTG'}
                   </p>
                 </div>
-                <div className="absolute top-4 right-4 w-10 h-10 lg:w-12 lg:h-12 bg-red-600 bg-opacity-20 rounded-xl flex items-center justify-center backdrop-blur-sm">
-                  <DollarSign className="text-red-400" size={20} />
+                <div className="absolute top-4 right-4 w-10 h-10 lg:w-12 lg:h-12 bg-green-500 bg-opacity-20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+                  <DollarSign className="text-green-200" size={20} />
                 </div>
-                <div className="absolute -right-6 -bottom-6 w-20 h-20 lg:w-24 lg:h-24 bg-red-600 bg-opacity-10 rounded-full blur-xl"></div>
-                <div className="absolute -left-6 -top-6 w-16 h-16 lg:w-20 lg:h-20 bg-red-600 bg-opacity-10 rounded-full blur-xl"></div>
+                <div className="absolute -right-6 -bottom-6 w-20 h-20 lg:w-24 lg:h-24 bg-green-500 bg-opacity-10 rounded-full blur-xl"></div>
+                <div className="absolute -left-6 -top-6 w-16 h-16 lg:w-20 lg:h-20 bg-green-500 bg-opacity-10 rounded-full blur-xl"></div>
               </div>
 
               {/* Enhanced Stats Cards - Classic Size */}
