@@ -6,11 +6,16 @@ class TransactionSerializer(serializers.ModelSerializer):
     sender_name = serializers.SerializerMethodField()
     receiver_name = serializers.SerializerMethodField()
     display_type = serializers.SerializerMethodField()
+    sender_phone = serializers.SerializerMethodField()
+    receiver_phone = serializers.SerializerMethodField()
+    sender_email = serializers.SerializerMethodField()
+    receiver_email = serializers.SerializerMethodField()
     
     class Meta:
         model = Transaction
         fields = [
             'id', 'transaction_type', 'sender', 'receiver', 'sender_name', 'receiver_name',
+            'sender_phone', 'receiver_phone', 'sender_email', 'receiver_email',
             'amount', 'fee', 'total_amount', 'currency', 'reference_number',
             'description', 'status', 'created_at', 'updated_at', 'processed_at',
             'display_type'
@@ -38,6 +43,30 @@ class TransactionSerializer(serializers.ModelSerializer):
             'deposit': 'Depo Lajan'
         }
         return type_map.get(obj.transaction_type, obj.transaction_type)
+
+    def get_sender_phone(self, obj):
+        try:
+            return obj.sender.phone_number if obj.sender else None
+        except Exception:
+            return None
+
+    def get_receiver_phone(self, obj):
+        try:
+            return obj.receiver.phone_number if obj.receiver else None
+        except Exception:
+            return None
+
+    def get_sender_email(self, obj):
+        try:
+            return obj.sender.email if obj.sender else None
+        except Exception:
+            return None
+
+    def get_receiver_email(self, obj):
+        try:
+            return obj.receiver.email if obj.receiver else None
+        except Exception:
+            return None
 
 class PhoneTopUpSerializer(serializers.ModelSerializer):
     transaction = TransactionSerializer(read_only=True)

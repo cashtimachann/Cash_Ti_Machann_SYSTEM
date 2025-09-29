@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { COUNTRY_CODES, ALLOWED_REGISTRATION_COUNTRIES, validatePhoneNumber, formatPhoneNumber } from '../../../../utils/countryCodes'
+import { formatDateTimeLocal } from '@/utils/datetime'
 
 // Centralized API Base URL
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -444,7 +445,7 @@ export default function AdminUsers() {
 
   const exportToCSV = (users: any[]) => {
     const headers = ['Non', 'Email', 'Tip Itilizatè', 'Telefòn', 'Balans', 'Estati KYC', 'Estati Kont', 'Dat Enskripsyon']
-    const csvContent = [
+  const csvContent = [
       headers.join(','),
       ...users.map(user => [
         `"${user.first_name} ${user.last_name}"`,
@@ -490,7 +491,7 @@ export default function AdminUsers() {
       </table>
     `
 
-    const blob = new Blob([tableHTML], { type: 'application/vnd.ms-excel' })
+  const blob = new Blob([tableHTML], { type: 'application/vnd.ms-excel' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
     link.download = `kliyan-ekspote-${new Date().toISOString().split('T')[0]}.xls`
@@ -516,7 +517,7 @@ export default function AdminUsers() {
       </head>
       <body>
         <h1>Lis Kliyan yo - Cash Ti Machann</h1>
-        <div class="date">Ekspote nan: ${new Date().toLocaleDateString()}</div>
+  <div class="date">Ekspote nan: ${formatDateTimeLocal(new Date(), { year: 'numeric', month: '2-digit', day: '2-digit' })}</div>
         <table>
           <thead>
             <tr>
@@ -1494,11 +1495,7 @@ export default function AdminUsers() {
                     </td>
                     <td className="px-2 py-3 whitespace-nowrap text-xs text-gray-900 w-28">
                       <div className="truncate">
-                        {new Date(user.date_joined).toLocaleDateString('fr-HT', {
-                          year: '2-digit',
-                          month: '2-digit',
-                          day: '2-digit'
-                        })}
+                        {formatDateTimeLocal(user.date_joined, { year: '2-digit', month: '2-digit', day: '2-digit' })}
                       </div>
                     </td>
                     <td className="px-2 py-3 whitespace-nowrap w-20">
@@ -1653,7 +1650,7 @@ export default function AdminUsers() {
                   <p><span className="font-medium">Telefòn:</span> {selectedUser.profile?.phone || 'Pa gen'}</p>
                   <p><span className="font-medium">Tip:</span> {selectedUser.user_type}</p>
                   <p><span className="font-medium">Estati:</span> {selectedUser.is_active ? 'Aktif' : 'Inaktif'}</p>
-                  <p><span className="font-medium">Dat enskripsyon:</span> {new Date(selectedUser.date_joined).toLocaleDateString()}</p>
+                  <p><span className="font-medium">Dat enskripsyon:</span> {formatDateTimeLocal(selectedUser.date_joined, { year: 'numeric', month: '2-digit', day: '2-digit' })}</p>
                 </div>
               </div>
 
@@ -1692,7 +1689,7 @@ export default function AdminUsers() {
                     </span>
                   </p>
                   {selectedUser.profile?.verification_date && (
-                    <p><span className="font-medium">Dat Veifikasyon:</span> {new Date(selectedUser.profile.verification_date).toLocaleDateString()}</p>
+                    <p><span className="font-medium">Dat Veifikasyon:</span> {formatDateTimeLocal(selectedUser.profile.verification_date, { year: 'numeric', month: '2-digit', day: '2-digit' })}</p>
                   )}
                 </div>
               </div>
@@ -1777,7 +1774,7 @@ export default function AdminUsers() {
                             <p className="font-medium text-gray-900">{transaction.description}</p>
                             <p className="text-sm text-gray-500">{transaction.type}</p>
                             <p className="text-xs text-gray-400">
-                              {transaction.created_at ? new Date(transaction.created_at).toLocaleString() : 'Dat pa disponib'}
+                              {transaction.created_at ? formatDateTimeLocal(transaction.created_at) : 'Dat pa disponib'}
                             </p>
                           </div>
                           <span className={`font-medium ${

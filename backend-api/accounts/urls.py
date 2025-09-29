@@ -67,6 +67,7 @@ urlpatterns = [
     path('security/overview/', views.security_overview, name='security_overview'),
     
     # Profile management
+    path('user-profile/', views.get_user_profile, name='get_user_profile'),
     path('update-email/', views.update_email, name='update_email'),
     path('update-phone/', views.update_phone, name='update_phone'),
     path('change-password/', views.change_password, name='change_password'),

@@ -60,10 +60,16 @@ def send_money(request):
         if not pin_valid:
             return Response({'error': pin_message}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Find receiver
+        # Find receiver by phone or email
         try:
             from accounts.models import User
-            receiver = User.objects.get(phone_number=receiver_phone)
+            # Try to find by phone number first
+            if '@' in receiver_phone:
+                # It's an email
+                receiver = User.objects.get(email=receiver_phone)
+            else:
+                # It's a phone number
+                receiver = User.objects.get(phone_number=receiver_phone)
         except User.DoesNotExist:
             return Response({'error': 'Destinatè pa jwenn'}, status=status.HTTP_404_NOT_FOUND)
         
@@ -72,7 +78,11 @@ def send_money(request):
             return Response({'error': 'Ou pa ka voye lajan ba ou menm'}, status=status.HTTP_400_BAD_REQUEST)
         
         # Check sender's balance
-        sender_wallet = request.user.wallet
+        try:
+            sender_wallet = request.user.wallet
+        except:
+            return Response({'error': 'Wallet ou pa jwenn'}, status=status.HTTP_400_BAD_REQUEST)
+            
         fee = amount * Decimal('0.01')  # 1% fee
         total_amount = amount + fee
         
@@ -96,7 +106,11 @@ def send_money(request):
         sender_wallet.balance -= total_amount
         sender_wallet.save()
         
-        receiver_wallet = receiver.wallet
+        try:
+            receiver_wallet = receiver.wallet
+        except:
+            return Response({'error': 'Wallet destinatè a pa jwenn'}, status=status.HTTP_400_BAD_REQUEST)
+            
         receiver_wallet.balance += amount
         receiver_wallet.save()
         

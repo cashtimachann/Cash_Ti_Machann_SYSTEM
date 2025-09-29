@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { formatActivityTime } from '@/utils/datetime'
 
 // Centralized API Base URL
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -285,7 +286,7 @@ export default function AdminOverview() {
                         <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        {activity.time || 'Dat pa disponib'}
+                        {formatActivityTime(activity)}
                       </span>
                     </p>
                   </div>

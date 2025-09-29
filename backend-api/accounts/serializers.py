@@ -13,12 +13,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
     residence_country_name = serializers.SerializerMethodField()
     country_display = serializers.SerializerMethodField()
     residence_country_display = serializers.SerializerMethodField()
+    profile_picture_url = serializers.SerializerMethodField()
+    
     class Meta:
         model = UserProfile
         fields = [
             'first_name', 'last_name', 'date_of_birth', 'address', 'city', 'country',
             'residence_country_code', 'residence_country_name', 'country_display', 'residence_country_display',
-            'id_document_type', 'id_document_number', 'verification_status'
+            'id_document_type', 'id_document_number', 'verification_status', 'profile_picture', 'profile_picture_url',
+            'preferred_language'
         ]
         read_only_fields = ['verification_status']
 
@@ -44,6 +47,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
             return f"{base} ({rc.iso2})"
         if obj.country:
             return obj.country
+        return None
+
+    def get_profile_picture_url(self, obj):
+        """Return the full URL for the profile picture"""
+        if obj.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.profile_picture.url)
+            return obj.profile_picture.url
         return None
 
 class WalletSerializer(serializers.ModelSerializer):

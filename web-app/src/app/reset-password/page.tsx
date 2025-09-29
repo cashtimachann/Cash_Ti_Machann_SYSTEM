@@ -1,9 +1,10 @@
 'use client'
 
+import { Suspense } from 'react'
 import { useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 
-export default function ResetPasswordPage() {
+function ResetPasswordInner() {
   const search = useSearchParams()
   const router = useRouter()
   const uid = search.get('uid') || ''
@@ -180,5 +181,13 @@ export default function ResetPasswordPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Ap chaje...</div>}>
+      <ResetPasswordInner />
+    </Suspense>
   )
 }

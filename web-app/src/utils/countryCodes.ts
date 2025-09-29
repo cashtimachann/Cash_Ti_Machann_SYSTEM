@@ -6,6 +6,8 @@ export interface CountryCode {
   dialCode: string
   flag: string
   areaCodes?: string[]
+  // Optional human-readable guidance for phone format per country
+  phoneValidation?: string
 }
 
 export const COUNTRY_CODES: CountryCode[] = [
@@ -15,7 +17,8 @@ export const COUNTRY_CODES: CountryCode[] = [
     name: 'Haiti',
     nameKreol: 'Ayiti',
     dialCode: '+509',
-    flag: '🇭🇹'
+    flag: '🇭🇹',
+    phoneValidation: '8 chif, kòmanse ak 2, 3, 4, oswa 5'
     // No area codes - Haiti uses 8-digit numbers directly after +509
   },
   
@@ -83,6 +86,7 @@ export const COUNTRY_CODES: CountryCode[] = [
     nameKreol: 'Etazini',
     dialCode: '+1',
     flag: '🇺🇸',
+    phoneValidation: '10 chif (NANP)',
     areaCodes: [
       '212', '646', '332', '917', // New York
       '305', '786', '645', // Miami (Large Haitian community)
@@ -112,6 +116,7 @@ export const COUNTRY_CODES: CountryCode[] = [
     nameKreol: 'Kanada',
     dialCode: '+1',
     flag: '🇨🇦',
+    phoneValidation: '10 chif (NANP)',
     areaCodes: [
       '514', '438', '263', // Montreal (Large Haitian community)
       '416', '647', '437', '365', // Toronto
@@ -128,7 +133,8 @@ export const COUNTRY_CODES: CountryCode[] = [
     name: 'France',
     nameKreol: 'Frans',
     dialCode: '+33',
-    flag: '🇫🇷'
+    flag: '🇫🇷',
+    phoneValidation: '9-10 chif'
   },
   {
     code: 'GB',
@@ -165,7 +171,8 @@ export const COUNTRY_CODES: CountryCode[] = [
     name: 'Brazil',
     nameKreol: 'Brezil',
     dialCode: '+55',
-    flag: '🇧🇷'
+    flag: '🇧🇷',
+    phoneValidation: '10-11 chif'
   },
   {
     code: 'AR',
@@ -179,7 +186,8 @@ export const COUNTRY_CODES: CountryCode[] = [
     name: 'Chile',
     nameKreol: 'Chili',
     dialCode: '+56',
-    flag: '🇨🇱'
+    flag: '🇨🇱',
+    phoneValidation: '9 chif'
   },
   {
     code: 'CO',

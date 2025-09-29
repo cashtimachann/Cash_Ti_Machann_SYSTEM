@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import BackButton from '@/app/components/BackButton'
 import { COUNTRY_CODES, ALLOWED_REGISTRATION_COUNTRIES } from '../../../../../utils/countryCodes'
+import { formatDateTimeLocal } from '@/utils/datetime'
 
 interface User {
   id: string
@@ -643,7 +644,7 @@ export default function ClientDetailPage() {
               else if (a.type.startsWith('password')) result = 'Ranpli'
               return (
                 <tr key={idx} className="border-b last:border-none hover:bg-gray-50">
-                  <td className="py-2 pr-4 whitespace-nowrap">{new Date(a.timestamp).toLocaleString()}</td>
+                  <td className="py-2 pr-4 whitespace-nowrap">{formatDateTimeLocal(a.timestamp)}</td>
                   <td className="py-2 pr-4">{label}</td>
                   <td className="py-2 pr-4">{a.ip_address || '-'}</td>
                   <td className="py-2 pr-4">{result || '-'}</td>
@@ -876,14 +877,14 @@ export default function ClientDetailPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-500">Dat Kreyasyon</label>
                     <p className="mt-1 text-sm text-gray-900">
-                      {new Date(user.date_joined).toLocaleDateString('fr-HT')}
+                      {formatDateTimeLocal(user.date_joined, { year: 'numeric', month: '2-digit', day: '2-digit' })}
                     </p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-500">Dènye Koneksyon</label>
                     <p className="mt-1 text-sm text-gray-900">
                       {user.last_login ? (
-                        <span title={new Date(user.last_login).toLocaleString('fr-HT')}>
+                        <span title={formatDateTimeLocal(user.last_login)}>
                           {formatRelative(user.last_login)}
                         </span>
                       ) : 'Pa janm konekte'}
@@ -903,7 +904,7 @@ export default function ClientDetailPage() {
                           <p className="text-sm font-medium text-gray-900">{transaction.type}</p>
                           <p className="text-xs text-gray-500">{transaction.description}</p>
                           <p className="text-xs text-gray-400">
-                            {new Date(transaction.created_at).toLocaleDateString('fr-HT')}
+                            {formatDateTimeLocal(transaction.created_at, { year: 'numeric', month: '2-digit', day: '2-digit' })}
                           </p>
                         </div>
                         <div className="text-left sm:text-right">
@@ -1064,10 +1065,10 @@ export default function ClientDetailPage() {
                       {getFilteredTransactions().map((transaction) => (
                         <tr key={transaction.id}>
                           <td className="px-3 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {new Date(transaction.created_at).toLocaleDateString('fr-HT')}
+                            {formatDateTimeLocal(transaction.created_at, { year: 'numeric', month: '2-digit', day: '2-digit' })}
                           </td>
                           <td className="px-3 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {new Date(transaction.created_at).toLocaleTimeString('fr-HT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            {formatDateTimeLocal(transaction.created_at, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                           </td>
                           <td className="px-3 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                             {transaction.type}
@@ -1129,7 +1130,7 @@ export default function ClientDetailPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-500">Dat Kreyasyon</label>
                     <p className="mt-1 text-sm text-gray-900">
-                      {user.wallet?.created_at ? new Date(user.wallet.created_at).toLocaleDateString('fr-HT') : 'Pa gen'}
+                      {user.wallet?.created_at ? formatDateTimeLocal(user.wallet.created_at, { year: 'numeric', month: '2-digit', day: '2-digit' }) : 'Pa gen'}
                     </p>
                   </div>
                 </div>
@@ -1176,7 +1177,7 @@ export default function ClientDetailPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-500">Dat Nesans</label>
                 <p className="mt-1 text-sm text-gray-900">
-                  {user.profile?.date_of_birth ? new Date(user.profile.date_of_birth).toLocaleDateString('fr-HT') : 'Pa gen'}
+                  {user.profile?.date_of_birth ? formatDateTimeLocal(user.profile.date_of_birth, { year: 'numeric', month: '2-digit', day: '2-digit' }) : 'Pa gen'}
                 </p>
               </div>
               <div>
@@ -1190,7 +1191,7 @@ export default function ClientDetailPage() {
                 <p className="mt-1 text-sm text-gray-900">
                   {user.last_login
                     ? (
-                      <span title={new Date(user.last_login).toLocaleString('fr-HT')}>
+                      <span title={formatDateTimeLocal(user.last_login)}>
                         {formatRelative(user.last_login)}
                       </span>
                     ) : 'Pa janm konekte'}
@@ -1258,26 +1259,26 @@ export default function ClientDetailPage() {
                             <div>
                               <span className="text-gray-500">Dat Emisyon:</span>
                               <span className="ml-2 font-medium text-gray-900">
-                                {document.issue_date ? new Date(document.issue_date).toLocaleDateString('fr-HT') : 'Pa gen enfòmasyon'}
+                                {document.issue_date ? formatDateTimeLocal(document.issue_date, { year: 'numeric', month: '2-digit', day: '2-digit' }) : 'Pa gen enfòmasyon'}
                               </span>
                             </div>
                             <div>
                               <span className="text-gray-500">Dat Ekspirasyon:</span>
                               <span className="ml-2 font-medium text-gray-900">
-                                {document.expiry_date ? new Date(document.expiry_date).toLocaleDateString('fr-HT') : 'Pa gen enfòmasyon'}
+                                {document.expiry_date ? formatDateTimeLocal(document.expiry_date, { year: 'numeric', month: '2-digit', day: '2-digit' }) : 'Pa gen enfòmasyon'}
                               </span>
                             </div>
                             <div>
                               <span className="text-gray-500">Dat Chaje:</span>
                               <span className="ml-2 font-medium text-gray-900">
-                                {document.uploaded_at ? new Date(document.uploaded_at).toLocaleDateString('fr-HT') : 'Pa gen enfòmasyon'}
+                                {document.uploaded_at ? formatDateTimeLocal(document.uploaded_at, { year: 'numeric', month: '2-digit', day: '2-digit' }) : 'Pa gen enfòmasyon'}
                               </span>
                             </div>
                             {document.verified_at && (
                               <div>
                                 <span className="text-gray-500">Dat Verifikasyon:</span>
                                 <span className="ml-2 font-medium text-gray-900">
-                                  {new Date(document.verified_at).toLocaleDateString('fr-HT')}
+                                  {formatDateTimeLocal(document.verified_at, { year: 'numeric', month: '2-digit', day: '2-digit' })}
                                 </span>
                               </div>
                             )}

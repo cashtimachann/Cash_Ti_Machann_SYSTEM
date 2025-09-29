@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import BackButton from '@/app/components/BackButton'
+import { formatDateTimeLocal } from '@/utils/datetime'
 
 interface Enterprise {
   id: string
@@ -215,7 +216,7 @@ export default function EnterpriseDetails() {
   }
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-HT', {
+    return formatDateTimeLocal(dateString, {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
@@ -536,7 +537,7 @@ export default function EnterpriseDetails() {
                     <label className="block text-sm font-medium text-gray-500">Dènye Koneksyon</label>
                     <p className="mt-1 text-sm text-gray-900">
                       {enterprise.last_login ? (
-                        <span title={new Date(enterprise.last_login).toLocaleString('fr-HT')}>
+                        <span title={formatDateTimeLocal(enterprise.last_login)}>
                           {formatTimeAgo(enterprise.last_login)}
                         </span>
                       ) : 'Jamè konekte'}
@@ -596,7 +597,9 @@ export default function EnterpriseDetails() {
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {formatTimeAgo(transaction.created_at)}
+                            <span title={formatDateTimeLocal(transaction.created_at)}>
+                              {formatTimeAgo(transaction.created_at)}
+                            </span>
                           </td>
                         </tr>
                       ))}

@@ -3,21 +3,20 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUserCoreData, formatTimeAgo } from '../../utils/useUserCoreData'
+import { formatDateTimeLocal } from '@/utils/datetime'
+import { Menu, QrCode, FileText, CreditCard, Receipt, Phone, Wallet, Zap, BarChart3, TrendingUp, DollarSign } from 'lucide-react'
 
-// Function to format date and time
+// Function to format date and time (local timezone, single render)
 const formatDateTime = (dateString: string): string => {
   try {
-    const date = new Date(dateString)
-    const options: Intl.DateTimeFormatOptions = {
-      day: '2-digit',
-      month: '2-digit', 
+    return formatDateTimeLocal(dateString, {
       year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
-      hour12: false
-    }
-    return date.toLocaleDateString('fr-FR', options).replace(/\//g, '/') + ' ' + 
-           date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', hour12: false })
+      hour12: false,
+    })
   } catch (error) {
     return '—'
   }
@@ -79,6 +78,9 @@ export default function ClientDashboard() {
   const WARNING_DURATION_MS = 30 * 1000 // 30 sec
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false)
+  const headerMenuRef = useRef<HTMLDivElement | null>(null)
   const [showInactivityWarning, setShowInactivityWarning] = useState(false)
   const inactivityTimer = useRef<NodeJS.Timeout | null>(null)
   const warningTimer = useRef<NodeJS.Timeout | null>(null)
@@ -90,9 +92,245 @@ export default function ClientDashboard() {
   const [transferForm, setTransferForm] = useState({ recipientPhone: '', amount: '', description: '', pin: '' })
   const [showPinModal, setShowPinModal] = useState(false)
   const [transferLoading, setTransferLoading] = useState(false)
-  const [recipientSearch, setRecipientSearch] = useState('')
-  const [searchResults, setSearchResults] = useState<any[]>([])
-  const [searchLoading, setSearchLoading] = useState(false)
+  
+  // Recipient management states
+  const [savedRecipients, setSavedRecipients] = useState<any[]>([])
+  const [showAddRecipient, setShowAddRecipient] = useState(false)
+  const [addRecipientForm, setAddRecipientForm] = useState({ name: '', contact: '', contactType: 'phone', country: 'HT' })
+  const [selectedRecipient, setSelectedRecipient] = useState<any>(null)
+  const [cleaningRecipients, setCleaningRecipients] = useState(false)
+  const [cleanReport, setCleanReport] = useState<{removed:number;updated:number;deduped:number}|null>(null)
+
+  // Country codes and phone formats
+  const countries = [
+    { code: 'HT', name: 'Haiti', flag: '🇭🇹', dialCode: '+509', format: '+509 XXXX XXXX', digits: 8, example: '+509 1234 5678' },
+    { code: 'DO', name: 'Dominican Republic', flag: '🇩🇴', dialCode: '+1', format: '+1 (XXX) XXX-XXXX', digits: 10, example: '+1 (809) 123-4567' },
+    { code: 'US', name: 'United States', flag: '🇺🇸', dialCode: '+1', format: '+1 (XXX) XXX-XXXX', digits: 10, example: '+1 (555) 123-4567' },
+    { code: 'CA', name: 'Canada', flag: '🇨🇦', dialCode: '+1', format: '+1 (XXX) XXX-XXXX', digits: 10, example: '+1 (416) 123-4567' },
+    { code: 'FR', name: 'France', flag: '🇫🇷', dialCode: '+33', format: '+33 X XX XX XX XX', digits: 9, example: '+33 1 23 45 67 89' },
+    { code: 'BR', name: 'Brazil', flag: '��', dialCode: '+55', format: '+55 (XX) XXXXX-XXXX', digits: 11, example: '+55 (11) 99999-1234' },
+    { code: 'CL', name: 'Chile', flag: '��', dialCode: '+56', format: '+56 X XXXX XXXX', digits: 8, example: '+56 9 1234 5678' },
+  ]
+
+  // Phone number formatting function
+  const formatPhoneNumber = (value: string, countryCode: string) => {
+    const country = countries.find(c => c.code === countryCode)
+    if (!country) return value
+
+    // Remove all non-digits
+    const digits = value.replace(/\D/g, '')
+    
+    // Remove country code if present
+    let localNumber = digits
+    const dialCodeDigits = country.dialCode.replace(/\D/g, '')
+    if (localNumber.startsWith(dialCodeDigits)) {
+      localNumber = localNumber.slice(dialCodeDigits.length)
+    }
+
+    // Format based on country
+    switch (countryCode) {
+      case 'HT':
+        if (localNumber.length >= 4) {
+          return `${country.dialCode} ${localNumber.slice(0, 4)} ${localNumber.slice(4, 8)}`
+        } else {
+          return `${country.dialCode} ${localNumber}`
+        }
+      case 'US':
+      case 'CA':
+      case 'DO':
+        if (localNumber.length >= 6) {
+          return `${country.dialCode} (${localNumber.slice(0, 3)}) ${localNumber.slice(3, 6)}-${localNumber.slice(6, 10)}`
+        } else if (localNumber.length >= 3) {
+          return `${country.dialCode} (${localNumber.slice(0, 3)}) ${localNumber.slice(3)}`
+        } else {
+          return `${country.dialCode} ${localNumber}`
+        }
+      case 'FR':
+        if (localNumber.length >= 2) {
+          const formatted = localNumber.match(/.{1,2}/g)?.join(' ') || localNumber
+          return `${country.dialCode} ${formatted}`
+        } else {
+          return `${country.dialCode} ${localNumber}`
+        }
+      case 'BR':
+        if (localNumber.length >= 7) {
+          return `${country.dialCode} (${localNumber.slice(0, 2)}) ${localNumber.slice(2, 7)}-${localNumber.slice(7, 11)}`
+        } else if (localNumber.length >= 2) {
+          return `${country.dialCode} (${localNumber.slice(0, 2)}) ${localNumber.slice(2)}`
+        } else {
+          return `${country.dialCode} ${localNumber}`
+        }
+      case 'CL':
+        if (localNumber.length >= 5) {
+          return `${country.dialCode} ${localNumber.slice(0, 1)} ${localNumber.slice(1, 5)} ${localNumber.slice(5, 9)}`
+        } else if (localNumber.length >= 1) {
+          return `${country.dialCode} ${localNumber.slice(0, 1)} ${localNumber.slice(1)}`
+        } else {
+          return `${country.dialCode} ${localNumber}`
+        }
+      default:
+        return `${country.dialCode} ${localNumber}`
+    }
+  }
+
+  // Normalize helpers to ensure exact matching
+  const normalizePhone = (phone: string) => phone.replace(/\D/g, '')
+  const normalizeEmail = (email: string) => email.trim().toLowerCase()
+
+  // Detect contact type from input
+  const detectContactTypeFromValue = (value: string): 'phone' | 'email' =>
+    value.includes('@') ? 'email' : 'phone'
+
+  // Normalize recipient field for backend lookup
+  const normalizeRecipient = (value: string) => {
+    const trimmed = (value || '').trim()
+    if (!trimmed) return ''
+    if (trimmed.includes('@')) {
+      return trimmed.toLowerCase()
+    }
+    // strip non-digits, keep country code if present
+    const digits = trimmed.replace(/\D/g, '')
+    // Ensure starts with country code; if HT and 8 digits, prepend 509
+    if (digits.length === 8) {
+      return `+509${digits}`
+    }
+    return `+${digits}`
+  }
+
+  // Get best display name from user object
+  const getUserDisplayName = (user: any) => {
+    const fullName = (user.full_name || user.name || '').toString().trim()
+    if (fullName) return fullName
+    const first = (user.first_name || '').toString().trim()
+    const last = (user.last_name || '').toString().trim()
+    const combo = `${first} ${last}`.trim()
+    if (combo) return combo
+    const username = (user.username || '').toString().trim()
+    return username
+  }
+
+  // Validate phone number
+  const validatePhoneNumber = (phone: string, countryCode: string) => {
+    const country = countries.find(c => c.code === countryCode)
+    if (!country) return false
+    
+    const digits = phone.replace(/\D/g, '')
+    const dialCodeDigits = country.dialCode.replace(/\D/g, '')
+    
+    // Check if it has the right number of total digits (country code + local)
+    const expectedLength = dialCodeDigits.length + country.digits
+    return digits.length === expectedLength
+  }
+
+  // Detect country from phone number
+  const detectCountryFromPhone = (phone: string) => {
+    const digits = phone.replace(/\D/g, '')
+    
+    // Check each country's dial code
+    for (const country of countries) {
+      const dialCodeDigits = country.dialCode.replace(/\D/g, '')
+      if (digits.startsWith(dialCodeDigits)) {
+        return country.code
+      }
+    }
+    
+    // Default to Haiti
+    return 'HT'
+  }
+
+  // Transaction filtering functions
+  const getFilteredTransactions = () => {
+    let filtered = [...transactions]
+    
+    // Search filter
+    if (transactionSearch) {
+      const searchTerm = transactionSearch.toLowerCase()
+      filtered = filtered.filter(t => 
+        (t.display_type || t.transaction_type || '').toLowerCase().includes(searchTerm) ||
+        (t.amount || '').toString().includes(searchTerm) ||
+        (t.status || '').toLowerCase().includes(searchTerm) ||
+        (t.description || '').toLowerCase().includes(searchTerm)
+      )
+    }
+    
+    // Type filter
+    if (transactionFilter !== 'all') {
+      filtered = filtered.filter(t => {
+        const type = (t.display_type || t.transaction_type || '').toLowerCase()
+        switch (transactionFilter) {
+          case 'sent': return type.includes('send') || type.includes('transfer') || type.includes('voye')
+          case 'received': return type.includes('receive') || type.includes('deposit') || type.includes('resevwa')
+          case 'bills': return type.includes('bill') || type.includes('fakti') || type.includes('payment')
+          case 'topup': return type.includes('topup') || type.includes('minit') || type.includes('recharge')
+          default: return true
+        }
+      })
+    }
+    
+    // Date filter
+    if (transactionDateFilter !== 'all') {
+      const now = new Date()
+      filtered = filtered.filter(t => {
+        const transactionDate = new Date(t.created_at)
+        switch (transactionDateFilter) {
+          case 'today':
+            return transactionDate.toDateString() === now.toDateString()
+          case 'week':
+            const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+            return transactionDate >= weekAgo
+          case 'month':
+            const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+            return transactionDate >= monthAgo
+          default: return true
+        }
+      })
+    }
+    
+    // Status filter
+    if (transactionStatusFilter !== 'all') {
+      filtered = filtered.filter(t => 
+        (t.status || '').toLowerCase().includes(transactionStatusFilter.toLowerCase())
+      )
+    }
+    
+    return filtered
+  }
+
+  const getPaginatedTransactions = () => {
+    const filtered = getFilteredTransactions()
+    const startIndex = (currentTransactionPage - 1) * transactionsPerPage
+    const endIndex = startIndex + transactionsPerPage
+    return {
+      transactions: filtered.slice(startIndex, endIndex),
+      totalTransactions: filtered.length,
+      totalPages: Math.ceil(filtered.length / transactionsPerPage)
+    }
+  }
+
+  const getTransactionIcon = (transaction: any) => {
+    const type = (transaction.display_type || transaction.transaction_type || '').toLowerCase()
+    if (type.includes('send') || type.includes('transfer') || type.includes('voye')) {
+      return '📤' // Sent
+    } else if (type.includes('receive') || type.includes('deposit') || type.includes('resevwa')) {
+      return '📥' // Received
+    } else if (type.includes('bill') || type.includes('fakti')) {
+      return '🧾' // Bill payment
+    } else if (type.includes('topup') || type.includes('minit')) {
+      return '📱' // Mobile topup
+    } else if (type.includes('withdraw') || type.includes('retire')) {
+      return '💰' // Withdrawal
+    }
+    return '💳' // Default
+  }
+
+  const getTransactionColor = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'completed': case 'success': case 'konple': return 'text-green-600 bg-green-50 border-green-200'
+      case 'pending': case 'processing': case 'ap tann': return 'text-yellow-600 bg-yellow-50 border-yellow-200'
+      case 'failed': case 'error': case 'echwe': return 'text-red-600 bg-red-50 border-red-200'
+      default: return 'text-gray-600 bg-gray-50 border-gray-200'
+    }
+  }
   
   // PIN management states
   const [pinStatus, setPinStatus] = useState<any>(null)
@@ -112,7 +350,11 @@ export default function ClientDashboard() {
   const [qrMode, setQrMode] = useState<'generate' | 'scan'>('generate')
   const [qrForm, setQrForm] = useState({ amount: '', description: '' })
   const [qrCode, setQrCode] = useState('')
+  const [qrImage, setQrImage] = useState('')
+  const [qrDisplayInfo, setQrDisplayInfo] = useState<any>(null)
   const [scannedData, setScannedData] = useState('')
+  const [cameraActive, setCameraActive] = useState(false)
+  const [scannerError, setScannerError] = useState('')
   
   // Security states
   const [securityOverview, setSecurityOverview] = useState<any>(null)
@@ -155,6 +397,14 @@ export default function ClientDashboard() {
   const [transactionDetailsLoading, setTransactionDetailsLoading] = useState(false)
   const [showAgentPinModal, setShowAgentPinModal] = useState(false)
   
+  // Transaction filtering and search states
+  const [transactionSearch, setTransactionSearch] = useState('')
+  const [transactionFilter, setTransactionFilter] = useState('all') // all, sent, received, bills, topup
+  const [transactionDateFilter, setTransactionDateFilter] = useState('all') // all, today, week, month
+  const [transactionStatusFilter, setTransactionStatusFilter] = useState('all') // all, completed, pending, failed
+  const [transactionsPerPage, setTransactionsPerPage] = useState(10)
+  const [currentTransactionPage, setCurrentTransactionPage] = useState(1)
+  
   // Profile management states
   const [profileForm, setProfileForm] = useState({
     email: '',
@@ -169,6 +419,24 @@ export default function ClientDashboard() {
   const [showPasswordChange, setShowPasswordChange] = useState(false)
   const [showPhoneChange, setShowPhoneChange] = useState(false)
   const [showEmailChange, setShowEmailChange] = useState(false)
+  
+  // Initialize profile photo from user data when available
+  useEffect(() => {
+    if (userData && !profilePhotoPreview) {
+      const existingPhoto = (userData as any)?.profile?.profile_picture_url ||
+                            (userData as any)?.profile?.profile_picture || 
+                            (userData as any)?.profile?.photo || 
+                            (userData as any)?.profile?.photo_url || 
+                            (userData as any)?.user?.profile_picture || 
+                            (userData as any)?.user?.photo_url || ''
+      
+      if (existingPhoto && !profilePhotoPreview) {
+        // Don't override if user is currently previewing a new photo
+        const photoUrl = existingPhoto.startsWith('http') ? existingPhoto : `http://127.0.0.1:8000${existingPhoto}`
+        setProfilePhotoPreview(photoUrl)
+      }
+    }
+  }, [userData, profilePhotoPreview])
   
   // Language settings states
   const [selectedLanguage, setSelectedLanguage] = useState<LanguageCode>('kreyol')
@@ -213,6 +481,26 @@ export default function ClientDashboard() {
     }
   }, [])
 
+  // Close header menu on outside click or Escape
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (!showHeaderMenu) return
+      const target = e.target as Node
+      if (headerMenuRef.current && !headerMenuRef.current.contains(target)) {
+        setShowHeaderMenu(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowHeaderMenu(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showHeaderMenu])
+
   // Load user language preference
   useEffect(() => {
     const loadUserLanguage = async () => {
@@ -235,13 +523,20 @@ export default function ClientDashboard() {
             localStorage.setItem('user_language', data.language || 'kreyol')
           }
         } catch (error) {
-          console.error('Error loading user language:', error)
+          // Error handled silently
         }
       }
     }
     
     loadUserLanguage()
   }, [userData])
+
+  // Load saved recipients when user data is available
+  useEffect(() => {
+    if (userData?.user?.id) {
+      loadSavedRecipients()
+    }
+  }, [userData?.user?.id])
 
   const handleLogout = async () => {
     const token = localStorage.getItem('auth_token')
@@ -273,27 +568,6 @@ export default function ClientDashboard() {
   }
 
   // Money transfer functions
-  const searchRecipients = async (query: string) => {
-    if (query.length < 3) {
-      setSearchResults([])
-      return
-    }
-    setSearchLoading(true)
-    const token = localStorage.getItem('auth_token')
-    try {
-      const response = await fetch(`http://127.0.0.1:8000/api/auth/users/search/?q=${encodeURIComponent(query)}`, {
-        headers: { 'Authorization': `Token ${token}` }
-      })
-      if (response.ok) {
-        const users = await response.json()
-        setSearchResults(users.filter((u: any) => u.user_type === 'client' && u.id !== userData?.user?.id))
-      }
-    } catch (error) {
-      console.error('Search error:', error)
-    } finally {
-      setSearchLoading(false)
-    }
-  }
 
   const handleTransferSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -301,11 +575,47 @@ export default function ClientDashboard() {
       alert('Tanpri antre destinatè ak montan an')
       return
     }
-    if (parseFloat(transferForm.amount) <= 0) {
-      alert('Montan an dwe pi gwo pase 0')
+    
+    // Validate recipient contact info
+    const detectedType = detectContactTypeFromValue(transferForm.recipientPhone)
+    if (detectedType === 'phone') {
+      const detectedCountry = detectCountryFromPhone(transferForm.recipientPhone)
+      if (!validatePhoneNumber(transferForm.recipientPhone, detectedCountry)) {
+        const country = countries.find(c => c.code === detectedCountry)
+        alert(`Nimewo telefòn an pa kòrèk. Egzanp: ${country?.example || '+509 1234 5678'}`)
+        return
+      }
+    } else if (detectedType === 'email') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(transferForm.recipientPhone)) {
+        alert('Adrès email la pa kòrèk')
+        return
+      }
+    } else {
+      alert('Tanpri antre yon nimewo telefòn oswa email ki valab')
       return
     }
-    if (!userData?.wallet || parseFloat(transferForm.amount) > parseFloat(userData.wallet.balance)) {
+    
+    // Validate amount format and value
+    const amount = parseFloat(transferForm.amount)
+    if (isNaN(amount) || amount <= 0) {
+      alert('Tanpri antre yon montan ki valab ak pi gwo pase 0')
+      return
+    }
+    
+    // Check minimum transfer amount (1 HTG)
+    if (amount < 1) {
+      alert('Montan minimum pou transfer se 1 HTG')
+      return
+    }
+    
+    // Check maximum transfer amount (100,000 HTG)
+    if (amount > 100000) {
+      alert('Montan maksimòm pou transfer se 100,000 HTG')
+      return
+    }
+    
+    if (!userData?.wallet || amount > parseFloat(userData.wallet.balance)) {
       alert('Ou pa gen ase lajan nan wallet ou')
       return
     }
@@ -331,6 +641,12 @@ export default function ClientDashboard() {
       return
     }
     
+    // Validate PIN is numeric
+    if (!/^\d+$/.test(transferForm.pin)) {
+      alert('PIN an dwe gen nimewo sèlman')
+      return
+    }
+    
     setTransferLoading(true)
     const token = localStorage.getItem('auth_token')
     try {
@@ -341,7 +657,7 @@ export default function ClientDashboard() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          receiver_phone: transferForm.recipientPhone,
+          receiver_phone: normalizeRecipient(transferForm.recipientPhone),
           amount: transferForm.amount,
           description: transferForm.description,
           pin: transferForm.pin
@@ -352,17 +668,420 @@ export default function ClientDashboard() {
         const result = await response.json()
         alert(`✅ Lajan voye ak siksè! Referans: ${result.reference_number}`)
         setTransferForm({ recipientPhone: '', amount: '', description: '', pin: '' })
+        setSelectedRecipient(null)
         setShowPinModal(false)
         await refreshAll()
+        
+  // Save recipient to local storage after successful transfer
+  const token = localStorage.getItem('auth_token')
+  let recipientName = transferForm.recipientPhone // Default to contact info
+        
+        try {
+          const response = await fetch(`http://127.0.0.1:8000/api/auth/users/search/?q=${encodeURIComponent(transferForm.recipientPhone)}`, {
+            headers: { 'Authorization': `Token ${token}` }
+          })
+          
+          if (response.ok) {
+            const users = await response.json()
+            
+            // Find exact match (normalized)
+            const entered = transferForm.recipientPhone
+            const matchedUser = users.find((user: any) => {
+              const phoneMatch = normalizePhone(user.phone_number || '') === normalizePhone(entered)
+              const emailMatch = normalizeEmail(user.email || '') === normalizeEmail(entered)
+              return phoneMatch || emailMatch
+            })
+            
+            if (matchedUser) {
+              const dbFullName = getUserDisplayName(matchedUser)
+              if (dbFullName) {
+                recipientName = dbFullName
+              }
+            }
+          }
+        } catch (error) {
+          // Error handled silently
+        }
+        
+        saveRecipient({
+          name: recipientName,
+          phone: transferForm.recipientPhone.includes('@') ? '' : transferForm.recipientPhone,
+          email: transferForm.recipientPhone.includes('@') ? transferForm.recipientPhone : ''
+        })
+        
       } else {
-        const error = await response.json()
-        alert(`❌ Erè: ${error.error || 'Tranzaksyon an echwe'}`)
+        const error = await response.json().catch(() => ({ error: 'Erè nan sistèm nan' }))
+        
+        // Provide specific error messages based on common issues
+        let errorMessage = error.error || 'Tranzaksyon an echwe'
+        
+        if (error.error && error.error.includes('insufficient')) {
+          errorMessage = 'Ou pa gen ase lajan nan kont ou'
+        } else if (error.error && error.error.includes('recipient')) {
+          errorMessage = 'Destinatè a pa jwenn oswa pa aktif'
+        } else if (error.error && error.error.includes('PIN')) {
+          errorMessage = 'PIN an pa kòrèk'
+        } else if (error.error && error.error.includes('limit')) {
+          errorMessage = 'Ou depase limit yo pou jodi a'
+        }
+        
+        alert(`❌ Erè: ${errorMessage}`)
       }
     } catch (error) {
-      alert('❌ Erè nan koneksyon an')
+      alert('❌ Erè nan koneksyon an. Tanpri verifye koneksyon entènèt ou ak eseye ankò.')
     } finally {
       setTransferLoading(false)
+      setTransferForm({...transferForm, pin: ''}) // Clear PIN for security
     }
+  }
+
+  // Recipient management functions
+  const loadSavedRecipients = () => {
+    try {
+      if (!userData?.user?.id) {
+        return
+      }
+
+      const key = `savedRecipients_${userData.user.id}`
+      const saved = localStorage.getItem(key)
+      
+      if (saved) {
+        const recipients = JSON.parse(saved)
+        setSavedRecipients(recipients)
+      } else {
+        setSavedRecipients([])
+      }
+    } catch (error) {
+      setSavedRecipients([])
+    }
+  }
+
+  const saveRecipient = (recipient: { name: string; phone: string; email: string }) => {
+    try {
+      if (!userData?.user?.id) {
+        return
+      }
+
+      const currentRecipients = savedRecipients || []
+      
+      // Check if recipient already exists (only check non-empty fields)
+      const exists = currentRecipients.some(r => {
+        if (recipient.phone && r.phone) {
+          return normalizePhone(r.phone) === normalizePhone(recipient.phone)
+        }
+        if (recipient.email && r.email) {
+          return normalizeEmail(r.email) === normalizeEmail(recipient.email)
+        }
+        return false
+      })
+      
+      if (!exists) {
+        const updatedRecipients = [...currentRecipients, { 
+          ...recipient, 
+          id: Date.now(),
+          lastUsed: new Date().toISOString()
+        }]
+        
+        // Keep only last 20 recipients
+        const limitedRecipients = updatedRecipients.slice(-20)
+        
+        const storageKey = `savedRecipients_${userData.user.id}`
+        localStorage.setItem(storageKey, JSON.stringify(limitedRecipients))
+        setSavedRecipients(limitedRecipients)
+      } else {
+        // Update existing entry name if the new name is better (non-empty and not equal to contact)
+        const updated = currentRecipients.map(r => {
+          const samePhone = recipient.phone && r.phone && normalizePhone(r.phone) === normalizePhone(recipient.phone)
+          const sameEmail = recipient.email && r.email && normalizeEmail(r.email) === normalizeEmail(recipient.email)
+          if (samePhone || sameEmail) {
+            const incoming = (recipient.name || '').trim()
+            const existing = (r.name || '').trim()
+            const contact = (r.phone || r.email || '').toString().trim()
+            const existingIsContact = (
+              (existing && normalizePhone(existing) === normalizePhone(contact)) ||
+              (existing && normalizeEmail(existing) === normalizeEmail(contact))
+            )
+            const incomingIsContact = (
+              (incoming && normalizePhone(incoming) === normalizePhone(contact)) ||
+              (incoming && normalizeEmail(incoming) === normalizeEmail(contact))
+            )
+            // Prefer non-contact, longer, and different names; never replace a good non-contact name with contact-like junk
+            const shouldUpdate = !!incoming && !incomingIsContact && (
+              !existing || existingIsContact || incoming.length > existing.length
+            ) && existing.toLowerCase() !== incoming.toLowerCase()
+            return shouldUpdate ? { ...r, name: incoming, lastUsed: new Date().toISOString() } : { ...r, lastUsed: new Date().toISOString() }
+          }
+          return r
+        })
+        const storageKey = `savedRecipients_${userData.user.id}`
+        localStorage.setItem(storageKey, JSON.stringify(updated))
+        setSavedRecipients(updated)
+      }
+    } catch (error) {
+      // Error handled silently
+    }
+  }
+
+  // Heuristic: decide if recipient name likely incomplete (e.g., equals contact, empty, placeholder, one token)
+  const shouldHydrateName = (recipient: any) => {
+    const name = (recipient?.name || '').toString().trim()
+    const contact = (recipient?.phone || recipient?.email || '').toString().trim()
+    if (!name) return true
+    if (name.toLowerCase() === 'destinatè') return true
+    if (normalizeEmail(name) === normalizeEmail(contact)) return true
+    if (normalizePhone(name) && normalizePhone(name) === normalizePhone(contact)) return true
+    // Single short token (e.g., only first or last name of 2-3 chars)
+    if (!name.includes(' ') && name.length <= 3) return true
+    return false
+  }
+
+  // Fetch best DB name for a given contact
+  const fetchDbNameForContact = async (contact: string) => {
+    try {
+      const token = localStorage.getItem('auth_token')
+      if (!contact || !token) return ''
+      const resp = await fetch(`http://127.0.0.1:8000/api/auth/users/search/?q=${encodeURIComponent(contact)}`, {
+        headers: { 'Authorization': `Token ${token}` }
+      })
+      if (!resp.ok) return ''
+      const users = await resp.json()
+      const matched = users.find((u: any) => {
+        const phoneMatch = normalizePhone(u.phone_number || '') === normalizePhone(contact)
+        const emailMatch = normalizeEmail(u.email || '') === normalizeEmail(contact)
+        return phoneMatch || emailMatch
+      })
+      return matched ? (getUserDisplayName(matched) || '') : ''
+    } catch (e) {
+      return ''
+    }
+  }
+
+  // Background: hydrate saved recipients with full DB names if missing/incomplete
+  const [hasHydratedRecipients, setHasHydratedRecipients] = useState(false)
+  const hydrateRecipientNames = async () => {
+    if (!userData?.user?.id || !savedRecipients?.length) return
+    try {
+      const toHydrate = savedRecipients.filter(r => shouldHydrateName(r)).slice(0, 10) // limit per pass
+      if (!toHydrate.length) return
+      const updates: any[] = []
+      for (const r of toHydrate) {
+        const contact = r.phone || r.email
+        if (!contact) continue
+        const dbName = await fetchDbNameForContact(contact)
+        if (dbName && dbName !== r.name) {
+          updates.push({ id: r.id, name: dbName })
+        }
+      }
+      if (updates.length) {
+        const updated = savedRecipients.map(r => {
+          const u = updates.find(x => x.id === r.id)
+          return u ? { ...r, name: u.name, hydratedNameAt: new Date().toISOString() } : r
+        })
+        setSavedRecipients(updated)
+        localStorage.setItem(`savedRecipients_${userData.user.id}`, JSON.stringify(updated))
+      }
+    } catch (e) {
+      // Error handled silently
+    } finally {
+      setHasHydratedRecipients(true)
+    }
+  }
+
+  // Trigger hydration once after loading recipients
+  useEffect(() => {
+    if (!loading && userData && savedRecipients.length && !hasHydratedRecipients) {
+      hydrateRecipientNames()
+    }
+  }, [loading, userData, savedRecipients, hasHydratedRecipients])
+
+  // One-click cleanup: fix names, dedupe, and remove invalids
+  const cleanupSavedRecipients = async () => {
+    if (!userData?.user?.id) return
+    setCleaningRecipients(true)
+    setCleanReport(null)
+    try {
+      const nowIso = new Date().toISOString()
+      let removed = 0
+      let updated = 0
+      let deduped = 0
+
+      // 1) Normalize entries and hydrate names when needed
+      const normalized = [] as any[]
+      for (const r of savedRecipients) {
+        const phone = (r.phone || '').toString().trim()
+        const email = (r.email || '').toString().trim()
+        if (!phone && !email) { removed++; continue }
+        const contact = phone || email
+
+        let name = (r.name || '').toString().trim()
+        let newName = name
+        const needsHydration = shouldHydrateName({ name, phone, email })
+        if (needsHydration) {
+          const dbName = await fetchDbNameForContact(contact)
+          if (dbName && dbName !== name) {
+            newName = dbName
+            updated++
+          }
+        }
+        normalized.push({
+          ...r,
+          name: newName || contact, // never empty
+          phone,
+          email,
+          lastUsed: r.lastUsed || nowIso,
+          id: r.id || Date.now(),
+        })
+      }
+
+      // 2) Deduplicate by contact key (prefer best name and most recent use)
+      const byKey: Record<string, any> = {}
+      const makeKey = (rec: any) => rec.phone ? `p:${normalizePhone(rec.phone)}` : `e:${normalizeEmail(rec.email)}`
+      const isContactLike = (nm: string, rec: any) => {
+        const contact = (rec.phone || rec.email || '').toString().trim()
+        return (
+          (!!normalizePhone(nm) && normalizePhone(nm) === normalizePhone(contact)) ||
+          (!!normalizeEmail(nm) && normalizeEmail(nm) === normalizeEmail(contact))
+        )
+      }
+      const prefer = (a: any, b: any) => {
+        // Prefer non-contact-like names
+        const aGood = a.name && !isContactLike(a.name, a)
+        const bGood = b.name && !isContactLike(b.name, b)
+        if (aGood !== bGood) return aGood ? a : b
+        // Prefer longer name
+        if ((a.name || '').length !== (b.name || '').length) return (a.name || '').length > (b.name || '').length ? a : b
+        // Prefer most recent lastUsed
+        const at = new Date(a.lastUsed || 0).getTime()
+        const bt = new Date(b.lastUsed || 0).getTime()
+        return at >= bt ? a : b
+      }
+
+      for (const rec of normalized) {
+        const key = makeKey(rec)
+        if (!byKey[key]) {
+          byKey[key] = rec
+        } else {
+          const chosen = prefer(byKey[key], rec)
+          if (chosen !== byKey[key]) {
+            byKey[key] = chosen
+          }
+          deduped++
+        }
+      }
+
+      const cleaned = Object.values(byKey)
+        .filter((r: any) => (r.phone || r.email))
+        .sort((a: any, b: any) => new Date(b.lastUsed || 0).getTime() - new Date(a.lastUsed || 0).getTime())
+
+      const storageKey = `savedRecipients_${userData.user.id}`
+      localStorage.setItem(storageKey, JSON.stringify(cleaned))
+      setSavedRecipients(cleaned as any[])
+      setCleanReport({ removed, updated, deduped })
+      alert(`✅ Lis destinatè a netwaye\nRetire: ${removed}\nMizajou non: ${updated}\nElimine doublon: ${deduped}`)
+    } catch (e) {
+      alert('❌ Echèk pandan netwayaj la. Tanpri eseye ankò.')
+    } finally {
+      setCleaningRecipients(false)
+    }
+  }
+
+  const addNewRecipient = async () => {
+    if (!addRecipientForm.contact) {
+      alert('Tanpri antre nimewo telefòn oswa email')
+      return
+    }
+
+    // Detect contact type automatically
+    const detectedType = detectContactTypeFromValue(addRecipientForm.contact)
+
+    // Validate phone number if detected as phone
+    if (detectedType === 'phone' && !validatePhoneNumber(addRecipientForm.contact, addRecipientForm.country)) {
+      const country = countries.find(c => c.code === addRecipientForm.country)
+      alert(`Nimewo telefòn an pa kòrèk. Egzanp: ${country?.example}`)
+      return
+    }
+    
+    // Search for user by contact info to get the real name
+  const token = localStorage.getItem('auth_token')
+  // Default to entered name, or fall back to contact if name is empty
+  let finalName = addRecipientForm.name || addRecipientForm.contact
+    
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/api/auth/users/search/?q=${encodeURIComponent(addRecipientForm.contact)}`, {
+        headers: { 'Authorization': `Token ${token}` }
+      })
+      
+      if (response.ok) {
+        const users = await response.json()
+        
+        // Find user that exactly matches the contact info
+        const matchedUser = users.find((user: any) => {
+          if (detectedType === 'phone') {
+            return normalizePhone(user.phone_number || '') === normalizePhone(addRecipientForm.contact)
+          } else {
+            return normalizeEmail(user.email || '') === normalizeEmail(addRecipientForm.contact)
+          }
+        })
+        
+        if (matchedUser) {
+          // Use the best available display name from database
+          const bestName = getUserDisplayName(matchedUser)
+          if (bestName) {
+            finalName = bestName
+          }
+        }
+      }
+    } catch (error) {
+      // Error handled silently
+    }
+    
+    const recipient = {
+      name: finalName,
+      phone: detectedType === 'phone' ? addRecipientForm.contact : '',
+      email: detectedType === 'email' ? addRecipientForm.contact : ''
+    }
+    
+    console.log('Final recipient to save:', recipient)
+    
+    saveRecipient(recipient)
+    setAddRecipientForm({ name: '', contact: '', contactType: 'phone', country: 'HT' })
+    setShowAddRecipient(false)
+    
+    // Force refresh the recipients list
+    setTimeout(() => {
+      loadSavedRecipients()
+    }, 100)
+    
+    alert('✅ Destinatè ajoute ak siksè!')
+  }
+
+  const selectRecipient = (recipient: any) => {
+    setSelectedRecipient(recipient)
+    setTransferForm({
+      ...transferForm, 
+      recipientPhone: recipient.phone || recipient.email
+    })
+    
+    // Update last used timestamp
+    const updatedRecipients = savedRecipients.map(r => 
+      r.id === recipient.id ? { ...r, lastUsed: new Date().toISOString() } : r
+    )
+    setSavedRecipients(updatedRecipients)
+    localStorage.setItem(`savedRecipients_${userData?.user?.id}`, JSON.stringify(updatedRecipients))
+    
+    // Show success feedback
+    const successMsg = document.createElement('div')
+    successMsg.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50'
+    successMsg.textContent = `✓ ${recipient.name} seleksyone`
+    document.body.appendChild(successMsg)
+    setTimeout(() => document.body.removeChild(successMsg), 2000)
+  }
+
+  const removeRecipient = (recipientId: number) => {
+    const updated = savedRecipients.filter(r => r.id !== recipientId)
+    setSavedRecipients(updated)
+    localStorage.setItem(`savedRecipients_${userData?.user?.id}`, JSON.stringify(updated))
+    alert('✅ Destinatè efase')
   }
 
   // PIN management functions
@@ -427,6 +1146,24 @@ export default function ClientDashboard() {
       fetchSecurityOverview()
     }
   }, [loading, userData])
+
+  // Cleanup camera when component unmounts or tab changes
+  useEffect(() => {
+    return () => {
+      if (cameraActive) {
+        stopCamera()
+      }
+    }
+  }, [])
+
+  // Cleanup camera when switching away from QR scan mode
+  useEffect(() => {
+    if (activeTab !== 'qr' || qrMode !== 'scan') {
+      if (cameraActive) {
+        stopCamera()
+      }
+    }
+  }, [activeTab, qrMode])
 
   // Security functions
   const fetchSecurityOverview = async () => {
@@ -545,8 +1282,9 @@ export default function ClientDashboard() {
       },
       receiver_details: {
         name: transaction.receiver_name || 'N/A',
-        phone: transaction.receiver_phone || 'N/A',
-        account: transaction.receiver_account || 'N/A'
+        phone: transaction.receiver_phone || transaction.receiver?.phone_number || 'N/A',
+        email: transaction.receiver_email || transaction.receiver?.email || 'N/A',
+        account: transaction.receiver_account || transaction.receiver?.email || 'N/A'
       },
       transaction_reference: transaction.id,
       confirmation_code: transaction.id?.slice(-8)?.toUpperCase() || 'N/A'
@@ -638,6 +1376,8 @@ export default function ClientDashboard() {
       if (response.ok) {
         const result = await response.json()
         setQrCode(result.qr_data)
+        setQrImage(result.qr_image)
+        setQrDisplayInfo(result.display_info)
         alert('✅ Kòd QR kreye!')
       } else {
         const error = await response.json()
@@ -645,6 +1385,74 @@ export default function ClientDashboard() {
       }
     } catch (error) {
       alert('❌ Erè nan koneksyon an')
+    }
+  }
+
+  // Camera QR Scanner functions
+  const startCamera = async () => {
+    setScannerError('')
+    try {
+      setCameraActive(true)
+      
+      // Demander permission pour la caméra
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'environment' // Utiliser la caméra arrière si disponible
+        } 
+      })
+      
+      // Obtenir l'élément vidéo
+      const video = document.getElementById('qr-video') as HTMLVideoElement
+      if (video) {
+        video.srcObject = stream
+        video.play()
+      }
+      
+    } catch (error) {
+      setScannerError('Pa ka aksè kamera a. Verifye otorizasyon yo.')
+      setCameraActive(false)
+      console.error('Camera error:', error)
+    }
+  }
+
+  const stopCamera = () => {
+    const video = document.getElementById('qr-video') as HTMLVideoElement
+    if (video && video.srcObject) {
+      const stream = video.srcObject as MediaStream
+      stream.getTracks().forEach(track => track.stop())
+      video.srcObject = null
+    }
+    setCameraActive(false)
+  }
+
+  const scanQRFromCamera = () => {
+    const video = document.getElementById('qr-video') as HTMLVideoElement
+    const canvas = document.getElementById('qr-canvas') as HTMLCanvasElement
+    const context = canvas.getContext('2d')
+    
+    if (video && canvas && context) {
+      // Capturer l'image de la vidéo
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      context.drawImage(video, 0, 0)
+      
+      // Pour un vrai scanner QR, vous utiliseriez une bibliothèque comme jsQR
+      // Pour le moment, on simule avec un placeholder
+      alert('🔍 Fonksyon eskane QR ap vini pwochennman. Pou kounye a, sèvi ak done manual yo.')
+      
+      // Exemple de données QR pour test
+      const testQRData = `{
+        "type": "payment_request",
+        "user_id": "2",
+        "phone": "+509 8765 4321",
+        "name": "Test Receiver",
+        "amount": "250",
+        "description": "Test payment from QR scan",
+        "timestamp": "${new Date().toISOString()}"
+      }`
+      
+      setScannedData(testQRData)
+      stopCamera()
     }
   }
 
@@ -713,129 +1521,721 @@ export default function ClientDashboard() {
           </div>
         </div>
       )}
-      <header className="bg-dark-950 shadow-sm"><div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><div className="flex justify-between items-center h-14 sm:h-16"><div className="flex items-center"><h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-white"><span className="hidden sm:inline">Cash Ti </span><span className="text-primary-600"><span className="sm:hidden">CTM</span><span className="hidden sm:inline">Machann</span></span><span className="hidden md:inline"> - Kliyan</span></h1></div><div className="flex items-center space-x-2 sm:space-x-4"><div className="hidden md:block text-sm text-gray-300">Byenveni, <span className="font-medium text-white">{userData?.user?.first_name}</span></div><button onClick={handleLogout} className="bg-primary-600 text-white px-3 py-2 sm:px-4 sm:py-2 rounded-md text-xs sm:text-sm hover:bg-primary-700 transition-colors"><span className="sm:hidden">Soti</span><span className="hidden sm:inline">Dekonekte</span></button></div></div></div></header>
-      <div className="flex">
-        <nav className="w-64 bg-white shadow-sm min-h-screen"><div className="p-4"><ul className="space-y-2">{['overview','transfer','qr','bills','wallet','transactions','topup','cards','merchants','agents','settings'].map(id => (<li key={id}><button onClick={()=>setActiveTab(id)} className={`w-full flex items-center px-4 py-2 text-left rounded-lg transition-colors ${activeTab===id?'bg-primary-600 text-white':'text-gray-700 hover:bg-gray-100'}`}>{id==='overview' && '📊 Apèsi Jeneral'}{id==='transfer' && '💸 Voye Lajan'}{id==='qr' && '📱 Kòd QR'}{id==='bills' && '📄 Peye Faktè'}{id==='wallet' && '💰 Wallet'}{id==='transactions' && '📋 Tranzaksyon'}{id==='topup' && '📞 Top Up'}{id==='cards' && '💳 Depo ak kat'}{id==='merchants' && '🏪 Peye machann'}{id==='agents' && '🏧 Retire nan ajan'}{id==='settings' && '⚙️ Paramèt'}</button></li>))}</ul></div></nav>
-        <main className="flex-1 p-8">
+      {/* Professional Header with Enhanced Design */}
+      <div className="bg-black text-white shadow-lg border-b border-gray-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="h-16 lg:h-18 flex items-center gap-6 min-w-0">
+            {/* Left group - Brand and Navigation */}
+            <div className="flex items-center space-x-4 min-w-0">
+              <button
+                className="lg:hidden p-2 rounded-lg hover:bg-gray-800 transition-colors"
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                aria-label="Toggle menu"
+              >
+                <Menu size={22} />
+              </button>
+              <div className="bg-gradient-to-br from-red-600 to-red-700 p-3 rounded-xl shadow-lg">
+                <span className="text-white font-bold text-lg">₹</span>
+              </div>
+              <div className="min-w-0">
+                <h1 className="font-bold text-xl lg:text-2xl truncate" title="Cash Ti Machann">
+                  Cash Ti Machann
+                </h1>
+              </div>
+            </div>
+
+            {/* Spacer */}
+            <div className="flex-1" />
+
+            {/* Right group - User Info */}
+            <div className="flex items-center gap-6">
+              <div className="hidden sm:block text-right min-w-0 leading-tight">
+                <p className="text-sm text-gray-200 truncate max-w-[40vw] lg:max-w-xs font-medium" 
+                   title={`Byenveni, ${userData?.user?.first_name || 'Itilizatè'}`}>
+                  Byenveni, <span className="text-white font-semibold">{userData?.user?.first_name || 'Itilizatè'}</span>
+                </p>
+              </div>
+              {/* Professional Profile Avatar */}
+              {(() => {
+                const displayName = getUserDisplayName(userData?.user || '') || 'Kliyan'
+                const profilePhotoUrl = profilePhotoPreview 
+                  || (userData as any)?.profile?.profile_picture_url 
+                  || (userData as any)?.profile?.profile_picture 
+                  || (userData as any)?.profile?.photo 
+                  || (userData as any)?.profile?.photo_url 
+                  || (userData as any)?.user?.profile_picture 
+                  || (userData as any)?.user?.photo_url 
+                  || ''
+                const initials = displayName.split(' ').filter(Boolean).map((s:string)=>s[0]).slice(0,2).join('').toUpperCase() || 'K'
+                return (
+                  <div className="relative" ref={headerMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowHeaderMenu(v => !v)}
+                      className="w-10 h-10 lg:w-12 lg:h-12 rounded-full overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center ring-2 ring-gray-500/30 hover:ring-red-400/60 transition-all duration-200 shadow-lg hover:shadow-xl"
+                      aria-haspopup="menu"
+                      aria-expanded={showHeaderMenu}
+                      aria-label="Ouvri meni pwofil"
+                      title="Pwofil ak Opsyon"
+                    >
+                      {profilePhotoUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={String(profilePhotoUrl)} alt={displayName} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-gray-700 text-sm lg:text-base font-bold">{initials}</span>
+                      )}
+                    </button>
+                    {showHeaderMenu && (
+                      <div role="menu" className="absolute right-0 mt-3 w-56 bg-white text-gray-900 rounded-xl shadow-2xl border border-gray-200/50 overflow-hidden z-50 backdrop-blur-sm">
+                        <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{displayName}</p>
+                          <p className="text-xs text-gray-500 truncate">{userData?.user?.email}</p>
+                        </div>
+                        <button
+                          role="menuitem"
+                          onClick={() => { setActiveTab('settings'); setShowHeaderMenu(false) }}
+                          className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors flex items-center gap-3"
+                        >
+                          <span className="text-base">⚙️</span>
+                          <span className="font-medium">Paramèt ak Sekirite</span>
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={() => { setShowHeaderMenu(false); handleLogout() }}
+                          className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors flex items-center gap-3"
+                        >
+                          <span className="text-base">🚪</span>
+                          <span className="font-medium">Dekonekte</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex relative">
+        {/* Mobile Overlay */}
+        {isSidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
+        {/* Enhanced Professional Sidebar */}
+        <aside
+          className={`fixed lg:static inset-y-0 left-0 z-50 lg:z-auto w-72 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out border-r border-gray-200 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+        >
+          <nav className="p-6 h-full overflow-y-auto">
+            {/* Mobile Balance Display */}
+            <div className="block sm:hidden mb-6 p-4 bg-gradient-to-r from-red-50 to-red-100 rounded-xl border border-red-200">
+              <p className="text-xs text-red-600 uppercase tracking-wide font-medium">Balans Disponib</p>
+              <p className="font-bold text-xl text-red-700">
+                {userData?.wallet?.balance ?? '—'} {userData?.wallet?.currency ?? 'HTG'}
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {/* Overview - Primary Action */}
+              <button
+                onClick={() => { setActiveTab('overview'); setIsSidebarOpen(false) }}
+                className={`w-full text-left p-4 rounded-xl flex items-center space-x-4 transition-all duration-200 font-medium ${
+                  activeTab==='overview' 
+                    ? 'bg-gradient-to-r from-red-600 to-red-700 text-white shadow-lg transform scale-[1.02]' 
+                    : 'text-gray-700 hover:bg-gray-50 hover:text-red-600 border border-gray-200 hover:border-red-200'
+                }`}
+              >
+                <div className={`p-2 rounded-lg ${activeTab==='overview' ? 'bg-white/20' : 'bg-red-100'}`}>
+                  <BarChart3 size={20} className={activeTab==='overview' ? 'text-white' : 'text-red-600'} />
+                </div>
+                <span className="text-base">Apèsi Jeneral</span>
+                {activeTab==='overview' && <div className="ml-auto w-2 h-2 bg-green-300 rounded-full animate-pulse" />}
+              </button>
+
+              {/* Financial Operations */}
+              <div className="pt-2">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-3">
+                  Operasyon Finansyè
+                </p>
+                
+                <div className="space-y-2">
+                  <button 
+                    onClick={() => { setActiveTab('transfer'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='transfer' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <TrendingUp size={18} className={activeTab==='transfer' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Voye Lajan</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('qr'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='qr' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <QrCode size={18} className={activeTab==='qr' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Kòd QR</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('wallet'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='wallet' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <Wallet size={18} className={activeTab==='wallet' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Wallet</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('cards'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='cards' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <CreditCard size={18} className={activeTab==='cards' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Depo ak Kat</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Services */}
+              <div className="pt-4">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-3">
+                  Sèvis yo
+                </p>
+                
+                <div className="space-y-2">
+                  <button 
+                    onClick={() => { setActiveTab('bills'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='bills' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <FileText size={18} className={activeTab==='bills' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Peye Fakti</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('topup'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='topup' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <Phone size={18} className={activeTab==='topup' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Top Up</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('merchants'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='merchants' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <Zap size={18} className={activeTab==='merchants' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Peye Machann</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('agents'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='agents' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <Receipt size={18} className={activeTab==='agents' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Retire nan Ajan</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Account Management */}
+              <div className="pt-4">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-3">
+                  Jesyon Kont
+                </p>
+                
+                <div className="space-y-2">
+                  <button 
+                    onClick={() => { setActiveTab('transactions'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='transactions' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <Receipt size={18} className={activeTab==='transactions' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Tout Tranzaksyon</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('settings'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='settings' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <FileText size={18} className={activeTab==='settings' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Paramèt ak Sekirite</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </nav>
+        </aside>
+
+        <main className="flex-1 p-6 lg:p-8 max-w-full bg-gray-50 min-h-screen">
           {activeTab==='overview' && (
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Dashboard Kliyan</h2>
-              {verificationStatus && <div className="mb-4 flex items-center gap-3"><span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${verificationStatus==='verified'?'bg-green-100 text-green-700':verificationStatus==='rejected'?'bg-red-100 text-red-700':'bg-yellow-100 text-yellow-700'}`}>Verifikasyon: {verificationStatus}</span>{showRequestVerification && <button onClick={async ()=>{const ok=await requestVerification(); if(ok){alert('Demann voye'); refreshAll()} else {alert('Demann pa pase')}}} className="text-xs bg-primary-600 text-white px-3 py-1 rounded hover:bg-primary-700">Mande Verifikasyon</button>}</div>}
-              {userData?.wallet && <div className="mb-6 bg-white p-4 rounded-lg border shadow-sm flex items-center justify-between"><div><p className="text-sm text-gray-600">Balans Wallet</p><p className="text-2xl font-bold text-gray-900">{userData.wallet.balance} {userData.wallet.currency}</p></div><button onClick={refreshAll} className="text-xs bg-gray-100 px-3 py-1 rounded hover:bg-gray-200">Refresh</button></div>}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">{stats && <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200"><p className="text-sm text-gray-600 mb-1">Tranzaksyon Mwa Sa a</p><p className="text-2xl font-bold text-gray-900">{stats.monthly_transactions}</p></div>}<div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200"><p className="text-sm text-gray-600 mb-1">Balans</p><p className="text-2xl font-bold text-gray-900">{stats?.balance || userData?.wallet?.balance} HTG</p></div></div>
-              <div className="mt-10"><div className="flex items-center justify-between mb-3"><h3 className="text-lg font-semibold text-gray-900">Dènye Tranzaksyon</h3><button onClick={refreshAll} className="text-xs text-primary-600 hover:underline">Mizajou</button></div>{transactions.length===0?<p className="text-sm text-gray-500">Pa gen tranzaksyon pou kounye a.</p>:(<ul className="divide-y divide-gray-200 bg-white rounded-lg border">{transactions.slice(0,10).map(t=>(<li key={t.id} onClick={() => openTransactionDetails(t)} className="px-4 py-3 flex items-center justify-between text-sm hover:bg-gray-50 cursor-pointer transition-colors"><div><p className="font-medium text-gray-800">{t.display_type || t.transaction_type}</p><p className="text-xs text-gray-500">{formatDateTime(t.created_at)}</p></div><div className="text-right"><p className="font-semibold text-gray-900">{t.amount} HTG</p><p className="text-xs text-gray-500">{t.status}</p></div><div className="text-gray-400">›</div></li>))}</ul>)}</div>
+            <div className="max-w-7xl mx-auto">
+              {/* Enhanced Profile Section - More Classic */}
+              <div className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 mb-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div className="flex items-center space-x-4">
+                    {(() => {
+                      const displayName = getUserDisplayName(userData?.user || '') || 'Kliyan'
+                      const profilePhotoUrl = profilePhotoPreview || (userData as any)?.profile?.profile_picture || (userData as any)?.profile?.photo || (userData as any)?.profile?.photo_url || (userData as any)?.user?.profile_picture || (userData as any)?.user?.photo_url || ''
+                      const initials = displayName.split(' ').filter(Boolean).map((s:string)=>s[0]).slice(0,2).join('').toUpperCase() || 'K'
+                      return (
+                        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl overflow-hidden bg-gradient-to-br from-red-100 to-red-200 flex items-center justify-center flex-shrink-0 ring-2 ring-red-100 shadow-sm">
+                          {profilePhotoUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={String(profilePhotoUrl)} alt={displayName} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-red-700 font-bold text-lg sm:text-xl">{initials}</span>
+                          )}
+                        </div>
+                      )
+                    })()}
+                    <div className="min-w-0">
+                      <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-1">
+                        {getUserDisplayName(userData?.user || {}) || 'Kliyan'}
+                      </h2>
+                      <p className="text-gray-600 text-sm sm:text-base">
+                        Jesyon kont ak tranzaksyon ou yo
+                      </p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setActiveTab('settings')} 
+                    className="text-gray-600 hover:text-red-600 self-start sm:self-center bg-gray-50 hover:bg-red-50 px-3 py-2 rounded-lg transition-all duration-200 border border-gray-200 hover:border-red-200"
+                  >
+                    <span className="text-sm font-medium">Mizajou Profil</span>
+                  </button>
+                </div>
+
+                {/* Enhanced Verification Badge */}
+                {verificationStatus && (
+                  <div className="mt-4 flex items-center gap-3">
+                    <div className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium ${
+                      verificationStatus==='verified' 
+                        ? 'bg-green-50 text-green-800 border border-green-200' 
+                        : verificationStatus==='rejected' 
+                          ? 'bg-red-50 text-red-800 border border-red-200' 
+                          : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full mr-2 ${
+                        verificationStatus==='verified' 
+                          ? 'bg-green-500' 
+                          : verificationStatus==='rejected' 
+                            ? 'bg-red-500' 
+                            : 'bg-yellow-500'
+                      }`}></div>
+                      <span>Verifikasyon: {verificationStatus}</span>
+                    </div>
+                    {showRequestVerification && (
+                      <button 
+                        onClick={async ()=>{const ok=await requestVerification(); if(ok){alert('Demann voye'); refreshAll()} else {alert('Demann pa pase')}}} 
+                        className="text-sm bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 transition-colors font-medium"
+                      >
+                        Mande Verifikasyon
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Enhanced Balance Card - Classic Size */}
+              <div className="bg-gradient-to-br from-black via-gray-900 to-black rounded-xl p-5 lg:p-6 text-white mb-6 relative overflow-hidden shadow-lg">
+                <div className="relative z-10">
+                  <p className="text-gray-300 text-xs font-medium mb-2 uppercase tracking-wider">
+                    Balans Wallet Ou
+                  </p>
+                  <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-1 tracking-tight">
+                    {userData?.wallet?.balance ?? 0}
+                  </div>
+                  <p className="text-gray-200 text-base font-medium">
+                    {userData?.wallet?.currency ?? 'HTG'}
+                  </p>
+                </div>
+                <div className="absolute top-4 right-4 w-10 h-10 lg:w-12 lg:h-12 bg-red-600 bg-opacity-20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+                  <DollarSign className="text-red-400" size={20} />
+                </div>
+                <div className="absolute -right-6 -bottom-6 w-20 h-20 lg:w-24 lg:h-24 bg-red-600 bg-opacity-10 rounded-full blur-xl"></div>
+                <div className="absolute -left-6 -top-6 w-16 h-16 lg:w-20 lg:h-20 bg-red-600 bg-opacity-10 rounded-full blur-xl"></div>
+              </div>
+
+              {/* Enhanced Stats Cards - Classic Size */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-5 mb-8">
+                <div className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-blue-50 rounded-xl flex items-center justify-center">
+                      <BarChart3 className="text-blue-600" size={20} />
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl lg:text-3xl font-bold text-gray-900">
+                        {stats?.monthly_transactions ?? 0}
+                      </p>
+                      <p className="text-xs text-gray-500 font-medium">Tranzaksyon</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-600 text-sm font-medium">Tranzaksyon Mwa Sa a</p>
+                  <div className="mt-2 flex items-center">
+                    <div className="w-full bg-blue-100 rounded-full h-1.5">
+                      <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: '75%' }}></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-green-50 rounded-xl flex items-center justify-center">
+                      <DollarSign className="text-green-600" size={20} />
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xl lg:text-2xl font-bold text-gray-900">
+                        {(stats?.balance ?? userData?.wallet?.balance ?? 0)}
+                      </p>
+                      <p className="text-xs text-gray-500 font-medium">{userData?.wallet?.currency ?? 'HTG'}</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-600 text-sm font-medium">Balans Total</p>
+                  <div className="mt-2 flex items-center">
+                    <div className="w-full bg-green-100 rounded-full h-1.5">
+                      <div className="bg-green-600 h-1.5 rounded-full" style={{ width: '90%' }}></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200 sm:col-span-2 xl:col-span-1">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-purple-50 rounded-xl flex items-center justify-center">
+                      <Zap className="text-purple-600" size={20} />
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl lg:text-3xl font-bold text-gray-900">5</p>
+                      <p className="text-xs text-gray-500 font-medium">Disponib</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-600 text-sm font-medium">Aksyon Rapid</p>
+                  <div className="mt-2 flex items-center">
+                    <div className="w-full bg-purple-100 rounded-full h-1.5">
+                      <div className="bg-purple-600 h-1.5 rounded-full" style={{ width: '100%' }}></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Enhanced Recent Transactions - Classic Size */}
+              <div className="bg-white rounded-xl p-5 lg:p-6 shadow-sm border border-gray-200">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg lg:text-xl font-bold text-gray-900">Dènye Tranzaksyon</h3>
+                    <p className="text-gray-500 text-xs mt-1">Wè aktivite yo ki pi resan</p>
+                  </div>
+                  <button 
+                    onClick={refreshAll} 
+                    className="bg-gray-50 hover:bg-red-50 text-gray-600 hover:text-red-600 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border border-gray-200 hover:border-red-200"
+                  >
+                    Mizajou
+                  </button>
+                </div>
+                {transactions.length===0 ? (
+                  <div className="text-center py-8">
+                    <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
+                      <Receipt className="text-gray-400" size={20} />
+                    </div>
+                    <p className="text-gray-500 text-sm">Pa gen tranzaksyon pou kounye a.</p>
+                    <p className="text-gray-400 text-xs mt-1">Kòmanse ak premye tranzaksyon ou</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {transactions.slice(0,10).map((t, index) => (
+                      <div 
+                        key={t.id} 
+                        onClick={() => openTransactionDetails(t)} 
+                        className={`px-3 py-3 flex items-center justify-between text-sm hover:bg-gray-50 cursor-pointer transition-colors rounded-lg ${
+                          index !== transactions.slice(0,10).length - 1 ? 'border-b border-gray-100' : ''
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3">
+                          <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
+                            <Receipt className="text-gray-500" size={14} />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900 text-sm">{t.display_type || t.transaction_type}</p>
+                            <p className="text-xs text-gray-500">{formatDateTime(t.created_at)}</p>
+                          </div>
+                        </div>
+                        <div className="text-right flex items-center space-x-2">
+                          <div>
+                            <p className="font-semibold text-gray-900 text-sm">{t.amount} HTG</p>
+                            <p className={`text-xs font-medium ${
+                              t.status === 'completed' ? 'text-green-600' : 
+                              t.status === 'pending' ? 'text-yellow-600' : 
+                              'text-gray-500'
+                            }`}>
+                              {t.status}
+                            </p>
+                          </div>
+                          <div className="text-gray-400">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {transactions.length > 10 && (
+                      <div className="pt-3 text-center">
+                        <button 
+                          onClick={() => setActiveTab('transactions')}
+                          className="text-red-600 hover:text-red-700 text-xs font-medium hover:underline"
+                        >
+                          Wè tout tranzaksyon yo ({transactions.length})
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {activeTab==='transfer' && (
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Voye Lajan</h2>
-              <div className="bg-white p-6 rounded-lg shadow-sm border max-w-md">
-                <form onSubmit={handleTransferSubmit} className="space-y-4">
-                  {/* Recipient Search */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Destinatè</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={recipientSearch}
-                        onChange={(e) => {
-                          setRecipientSearch(e.target.value)
-                          searchRecipients(e.target.value)
-                        }}
-                        placeholder="Antre non oswa nimewo telefòn"
-                        className="w-full border rounded px-3 py-2 text-sm"
-                      />
-                      {searchLoading && (
-                        <div className="absolute right-3 top-2">
-                          <div className="animate-spin h-4 w-4 border-2 border-primary-600 border-t-transparent rounded-full"></div>
-                        </div>
-                      )}
-                    </div>
-                    
-                    {/* Search Results */}
-                    {searchResults.length > 0 && (
-                      <div className="mt-2 border rounded-md max-h-40 overflow-y-auto">
-                        {searchResults.map((user) => (
-                          <button
-                            key={user.id}
-                            type="button"
-                            onClick={() => {
-                              setTransferForm({...transferForm, recipientPhone: user.phone_number})
-                              setRecipientSearch(`${user.first_name} ${user.last_name} (${user.phone_number})`)
-                              setSearchResults([])
-                            }}
-                            className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0"
+            <div className="max-w-4xl mx-auto">
+              <div className="mb-8">
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">Voye Lajan</h2>
+                <p className="text-gray-600">Voye lajan nan destinatè yo ak sekirite ak rapidite</p>
+              </div>
+              
+              {/* Back button when form is shown */}
+              {selectedRecipient && (
+                <div className="mb-6">
+                  <button
+                    onClick={() => {
+                      setSelectedRecipient(null)
+                      setTransferForm({ recipientPhone: '', amount: '', description: '', pin: '' })
+                    }}
+                    className="flex items-center text-gray-600 hover:text-red-600 text-sm font-medium transition-colors bg-gray-50 hover:bg-red-50 px-4 py-2 rounded-lg border border-gray-200 hover:border-red-200"
+                  >
+                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Tounen nan lis destinatè yo
+                  </button>
+                </div>
+              )}
+              
+              {/* Show recipient list and add button when no recipient is selected */}
+              {!selectedRecipient && (
+                <>
+                  {/* Saved Recipients Section */}
+                  {savedRecipients.length > 0 && (
+                    <div className="mb-8 bg-white p-8 rounded-2xl shadow-sm border border-gray-200">
+                      <div className="mb-6">
+                        <h3 className="text-xl font-bold text-gray-900 mb-2">Destinatè yo Ki Sovgade</h3>
+                        <p className="text-gray-600">Chwazi nan lis destinatè yo pou voye lajan pi vit</p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {savedRecipients
+                          .slice()
+                          .sort((a, b) => new Date(b.lastUsed || 0).getTime() - new Date(a.lastUsed || 0).getTime())
+                          .map((recipient) => (
+                          <div 
+                            key={recipient.id} 
+                            className="p-5 border-2 border-gray-200 rounded-xl hover:border-red-300 hover:bg-red-50 cursor-pointer transition-all duration-200 group relative hover:shadow-lg"
+                            onClick={() => selectRecipient(recipient)}
                           >
-                            <p className="font-medium text-sm">{user.first_name} {user.last_name}</p>
-                            <p className="text-xs text-gray-500">{user.phone_number}</p>
-                          </button>
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1 min-w-0">
+                                <div className="w-12 h-12 bg-gradient-to-br from-red-100 to-red-200 rounded-xl flex items-center justify-center mb-3">
+                                  <span className="text-red-700 font-bold text-lg">
+                                    {recipient.name.split(' ').map(n => n[0]).slice(0,2).join('').toUpperCase()}
+                                  </span>
+                                </div>
+                                <p className="font-semibold text-gray-900 truncate mb-1">{recipient.name}</p>
+                                <p className="text-sm text-gray-500 truncate">{recipient.phone || recipient.email}</p>
+                                {recipient.lastUsed && (
+                                  <p className="text-xs text-gray-400 mt-2">
+                                    Itilize: {formatDateTimeLocal(recipient.lastUsed, { year: 'numeric', month: '2-digit', day: '2-digit' })}
+                                  </p>
+                                )}
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (confirm(`Efase ${recipient.name}?`)) {
+                                    removeRecipient(recipient.id)
+                                  }
+                                }}
+                                className="ml-3 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all duration-200 bg-white hover:bg-red-50 w-8 h-8 rounded-full flex items-center justify-center"
+                                title="Efase destinatè a"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
                         ))}
                       </div>
-                    )}
-                    
-                    {/* Manual Phone Input */}
-                    <div className="mt-2">
-                      <input
-                        type="text"
-                        value={transferForm.recipientPhone}
-                        onChange={(e) => setTransferForm({...transferForm, recipientPhone: e.target.value})}
-                        placeholder="Oswa antre nimewo telefòn manuèlman"
-                        className="w-full border rounded px-3 py-2 text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Amount */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Montan (HTG)</label>
-                    <input
-                      type="number"
-                      value={transferForm.amount}
-                      onChange={(e) => setTransferForm({...transferForm, amount: e.target.value})}
-                      placeholder="0.00"
-                      min="1"
-                      step="0.01"
-                      className="w-full border rounded px-3 py-2 text-sm"
-                      required
-                    />
-                    {transferForm.amount && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        Frè: {(parseFloat(transferForm.amount) * 0.01).toFixed(2)} HTG | Total: {(parseFloat(transferForm.amount) * 1.01).toFixed(2)} HTG
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Description */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Kòmantè (opsyonèl)</label>
-                    <input
-                      type="text"
-                      value={transferForm.description}
-                      onChange={(e) => setTransferForm({...transferForm, description: e.target.value})}
-                      placeholder="Rezon pou tranzaksyon an"
-                      className="w-full border rounded px-3 py-2 text-sm"
-                    />
-                  </div>
-
-                  {/* Balance Check */}
-                  {userData?.wallet && (
-                    <div className="bg-gray-50 p-3 rounded text-sm">
-                      <p>Balans aktyèl: <span className="font-semibold">{userData.wallet.balance} HTG</span></p>
-                      {transferForm.amount && parseFloat(transferForm.amount) > parseFloat(userData.wallet.balance) && (
-                        <p className="text-red-600 text-xs mt-1">⚠️ Ou pa gen ase lajan</p>
-                      )}
                     </div>
                   )}
 
-                  <button
-                    type="submit"
-                    disabled={!transferForm.recipientPhone || !transferForm.amount || transferLoading}
-                    className="w-full bg-primary-600 text-white py-2 px-4 rounded hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                  >
-                    Kontinye ak PIN
-                  </button>
-                </form>
-              </div>
+                  {/* Add Recipient Button - Enhanced Design */}
+                  <div className="text-center bg-white p-12 rounded-2xl shadow-sm border border-gray-200">
+                    <div className="w-20 h-20 bg-gradient-to-br from-red-600 to-red-700 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
+                      <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-900 mb-2">Ajoute Nouvo Destinatè</h3>
+                    <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                      Ajoute destinatè yo pou pi vit ak pi fasil nan pwochen fwa yo
+                    </p>
+                    <button
+                      onClick={() => setShowAddRecipient(true)}
+                      className="bg-gradient-to-r from-red-600 to-red-700 text-white px-8 py-4 rounded-xl hover:from-red-700 hover:to-red-800 font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+                    >
+                      Ajoute Destinatè
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Transfer Form - Enhanced Design */}
+              {selectedRecipient && (
+                <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 max-w-lg mx-auto">
+                  <div className="mb-6 p-6 bg-gradient-to-r from-green-50 to-green-100 rounded-xl border border-green-200">
+                    <h3 className="font-bold text-gray-900 mb-3 flex items-center">
+                      <svg className="w-5 h-5 text-green-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Destinatè Seleksyone
+                    </h3>
+                    <div className="flex items-center space-x-4">
+                      <div className="w-12 h-12 bg-green-200 rounded-xl flex items-center justify-center">
+                        <span className="text-green-800 font-bold">
+                          {selectedRecipient.name.split(' ').map((n:string) => n[0]).slice(0,2).join('').toUpperCase()}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-green-800">{selectedRecipient.name}</p>
+                        <p className="text-sm text-green-700">{selectedRecipient.phone || selectedRecipient.email}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleTransferSubmit} className="space-y-6">
+                    {/* Amount */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Montan (HTG) <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          value={transferForm.amount}
+                          onChange={(e) => setTransferForm({...transferForm, amount: e.target.value})}
+                          placeholder="0.00"
+                          min="1"
+                          step="0.01"
+                          className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-lg font-medium focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+                          required
+                        />
+                        <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
+                          <span className="text-gray-500 font-medium">HTG</span>
+                        </div>
+                      </div>
+                      {transferForm.amount && (
+                        <div className="mt-2 p-3 bg-gray-50 rounded-lg">
+                          <p className="text-sm text-gray-600">
+                            <span className="font-medium">Frè:</span> {(parseFloat(transferForm.amount) * 0.01).toFixed(2)} HTG
+                            <span className="ml-4 font-medium">Total:</span> {(parseFloat(transferForm.amount) * 1.01).toFixed(2)} HTG
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Kòmantè (opsyonèl)</label>
+                      <input
+                        type="text"
+                        value={transferForm.description}
+                        onChange={(e) => setTransferForm({...transferForm, description: e.target.value})}
+                        placeholder="Rezon pou tranzaksyon an"
+                        className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+                      />
+                    </div>
+
+                    {/* Balance Check */}
+                    {userData?.wallet && (
+                      <div className="bg-blue-50 p-4 rounded-xl border border-blue-200">
+                        <div className="flex items-center justify-between">
+                          <span className="text-blue-800 font-medium">Balans aktyèl:</span>
+                          <span className="text-blue-900 font-bold text-lg">{userData.wallet.balance} HTG</span>
+                        </div>
+                        {transferForm.amount && parseFloat(transferForm.amount) > parseFloat(userData.wallet.balance) && (
+                          <p className="text-red-600 text-sm mt-2 flex items-center">
+                            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L5.082 15.5c-.77.833.192 2.5 1.732 2.5z" />
+                            </svg>
+                            Ou pa gen ase lajan
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={!transferForm.amount || transferLoading}
+                      className="w-full bg-gradient-to-r from-red-600 to-red-700 text-white py-4 px-6 rounded-xl hover:from-red-700 hover:to-red-800 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 disabled:transform-none"
+                    >
+                      {transferLoading ? (
+                        <span className="flex items-center justify-center">
+                          <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Ap pwosè...
+                        </span>
+                      ) : (
+                        'Kontinye ak PIN'
+                      )}
+                    </button>
+                  </form>
+                </div>
+              )}
             </div>
           )}
           {activeTab==='qr' && (
@@ -909,12 +2309,22 @@ export default function ClientDashboard() {
                       <div className="mt-4 p-4 bg-gray-50 rounded-lg text-center">
                         <p className="text-sm text-gray-600 mb-2">Kòd QR ou an (montre l bay moun ki ap peye a):</p>
                         <div className="bg-white p-4 rounded border inline-block">
-                          <div className="w-48 h-48 bg-gray-200 flex items-center justify-center text-xs text-gray-500 break-all">
-                            📱 QR Code<br/>
-                            <small className="block mt-2 max-w-full overflow-hidden">
-                              {qrCode.substring(0, 50)}...
-                            </small>
-                          </div>
+                          {qrImage ? (
+                            <div className="w-48 h-48 flex items-center justify-center">
+                              <img 
+                                src={`data:image/png;base64,${qrImage}`}
+                                alt="QR Code"
+                                className="max-w-full max-h-full object-contain"
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-48 h-48 bg-gray-200 flex items-center justify-center text-xs text-gray-500 break-all">
+                              📱 QR Code<br/>
+                              <small className="block mt-2 max-w-full overflow-hidden">
+                                {qrCode.substring(0, 50)}...
+                              </small>
+                            </div>
+                          )}
                         </div>
                         <p className="text-xs text-gray-500 mt-2">
                           Montan: {qrForm.amount} HTG
@@ -932,17 +2342,72 @@ export default function ClientDashboard() {
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Eskane Kòd QR pou Peye</h3>
                   
                   <div className="space-y-4">
+                    {/* Camera Scanner Section */}
+                    <div className="space-y-3">
+
+                      {!cameraActive ? (
+                        <div className="text-center">
+                          <div className="w-full h-48 bg-gray-100 rounded border-2 border-dashed border-gray-300 flex items-center justify-center mb-3">
+                            <div className="text-center text-gray-500">
+                              <div className="text-4xl mb-2">📷</div>
+                              <p className="text-sm">Kamera pa aktif</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={startCamera}
+                            className="w-full bg-primary-600 text-white py-2 px-4 rounded hover:bg-primary-700"
+                          >
+                            Ouvri Kamera
+                          </button>
+                          {scannerError && (
+                            <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
+                              <p className="text-sm text-red-800">{scannerError}</p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-center">
+                          <div className="relative w-full h-48 bg-black rounded overflow-hidden mb-3">
+                            <video
+                              id="qr-video"
+                              className="w-full h-full object-cover"
+                              autoPlay
+                              playsInline
+                            />
+                            <canvas id="qr-canvas" className="hidden" />
+
+                          </div>
+                          
+                          <div className="flex gap-2">
+                            <button
+                              onClick={scanQRFromCamera}
+                              className="flex-1 bg-green-600 text-white py-2 px-3 rounded hover:bg-green-700"
+                            >
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h4M4 8h4m4 0V4m0 0h4m-4 0a2 2 0 019 0M8 20h4a2 2 0 000-4H8a2 2 0 000 4z" />
+                              </svg>
+                              Eskane Kòd
+                            </button>
+                            <button
+                              onClick={stopCamera}
+                              className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                            >
+                              Fèmen
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Manual Input */}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Done Kòd QR</label>
                       <textarea
                         value={scannedData}
                         onChange={(e) => setScannedData(e.target.value)}
                         placeholder="Kole done kòd QR isit la oswa sèvi ak kamera a"
-                        className="w-full border rounded px-3 py-2 text-sm h-32"
+                        className="w-full border rounded px-3 py-2 text-sm h-24"
                       />
-                      <p className="text-xs text-gray-500 mt-1">
-                        Nan pwojè reyèl la, w ap gen yon kamera pou eskane kòd QR dirèkteman
-                      </p>
                     </div>
 
                     <button
@@ -1088,40 +2553,271 @@ export default function ClientDashboard() {
             </div>
           )}
           {activeTab==='transactions' && (
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Tout Tranzaksyon</h2>
-              {transactions.length===0 ? (
-                <p className="text-sm text-gray-500">Pa gen tranzaksyon.</p>
-              ) : (
-                <div className="overflow-x-auto bg-white border rounded-lg">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 py-2 text-left font-medium text-gray-600">Tip</th>
-                        <th className="px-4 py-2 text-left font-medium text-gray-600">Montan</th>
-                        <th className="px-4 py-2 text-left font-medium text-gray-600">Eta</th>
-                        <th className="px-4 py-2 text-left font-medium text-gray-600">Dat ak Lè</th>
-                        <th className="px-4 py-2 text-left font-medium text-gray-600">Aksyon</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {transactions.map(t => (
-                        <tr key={t.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-2">{t.display_type || t.transaction_type}</td>
-                          <td className="px-4 py-2">{t.amount} HTG</td>
-                          <td className="px-4 py-2">{t.status}</td>
-                          <td className="px-4 py-2">{formatDateTime(t.created_at)}</td>
-                          <td className="px-4 py-2">
-                            <button onClick={() => openTransactionDetails(t)} className="text-primary-600 hover:text-primary-800 text-sm font-medium">
-                              Wè Detay
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            <div className="max-w-7xl mx-auto">
+              <div className="mb-8">
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">Tout Tranzaksyon</h2>
+                <p className="text-gray-600">Wè ak filtre tout tranzaksyon ou yo</p>
+              </div>
+
+              {/* Search and Filters */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                  {/* Search */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Rechèche</label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={transactionSearch}
+                        onChange={(e) => setTransactionSearch(e.target.value)}
+                        placeholder="Rechèche tranzaksyon..."
+                        className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 pl-10 focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+                      />
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center">
+                        <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Type Filter */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Tip Tranzaksyon</label>
+                    <select
+                      value={transactionFilter}
+                      onChange={(e) => setTransactionFilter(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+                    >
+                      <option value="all">Tout tip yo</option>
+                      <option value="sent">Lajan voye</option>
+                      <option value="received">Lajan resevwa</option>
+                      <option value="bills">Fakti peye</option>
+                      <option value="topup">Top up minit</option>
+                    </select>
+                  </div>
+
+                  {/* Date Filter */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Pèryòd</label>
+                    <select
+                      value={transactionDateFilter}
+                      onChange={(e) => setTransactionDateFilter(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+                    >
+                      <option value="all">Tout dat yo</option>
+                      <option value="today">Jodi a</option>
+                      <option value="week">7 dènye jou yo</option>
+                      <option value="month">30 dènye jou yo</option>
+                    </select>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Estati</label>
+                    <select
+                      value={transactionStatusFilter}
+                      onChange={(e) => setTransactionStatusFilter(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+                    >
+                      <option value="all">Tout estati yo</option>
+                      <option value="completed">Konple</option>
+                      <option value="pending">Ap tann</option>
+                      <option value="failed">Echwe</option>
+                    </select>
+                  </div>
                 </div>
-              )}
+
+                {/* Results Summary */}
+                <div className="flex items-center justify-between text-sm text-gray-600 pt-4 border-t border-gray-100">
+                  <span>
+                    {getPaginatedTransactions().totalTransactions} tranzaksyon jwenn
+                  </span>
+                  <div className="flex items-center gap-4">
+                    <span>Montre:</span>
+                    <select
+                      value={transactionsPerPage}
+                      onChange={(e) => {
+                        setTransactionsPerPage(Number(e.target.value))
+                        setCurrentTransactionPage(1)
+                      }}
+                      className="border border-gray-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                    <span>pa paj</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Transactions List */}
+              {(() => {
+                const { transactions: paginatedTransactions, totalTransactions, totalPages } = getPaginatedTransactions()
+                
+                if (totalTransactions === 0) {
+                  return (
+                    <div className="bg-white rounded-2xl p-12 shadow-sm border border-gray-200 text-center">
+                      <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </div>
+                      <h3 className="text-xl font-bold text-gray-900 mb-2">
+                        {transactionSearch || transactionFilter !== 'all' || transactionDateFilter !== 'all' || transactionStatusFilter !== 'all' 
+                          ? 'Pa gen tranzaksyon ki konfòme ak rechèche a' 
+                          : 'Pa gen tranzaksyon pou kounye a'
+                        }
+                      </h3>
+                      <p className="text-gray-500 mb-6">
+                        {transactionSearch || transactionFilter !== 'all' || transactionDateFilter !== 'all' || transactionStatusFilter !== 'all'
+                          ? 'Eseye chanje filtè yo pou wè pi plis rezilta'
+                          : 'Kòmanse ak premye tranzaksyon ou'
+                        }
+                      </p>
+                      {(transactionSearch || transactionFilter !== 'all' || transactionDateFilter !== 'all' || transactionStatusFilter !== 'all') && (
+                        <button
+                          onClick={() => {
+                            setTransactionSearch('')
+                            setTransactionFilter('all')
+                            setTransactionDateFilter('all')
+                            setTransactionStatusFilter('all')
+                            setCurrentTransactionPage(1)
+                          }}
+                          className="bg-red-600 text-white px-6 py-2 rounded-lg hover:bg-red-700 transition-colors font-medium"
+                        >
+                          Efase tout filtè yo
+                        </button>
+                      )}
+                    </div>
+                  )
+                }
+                
+                return (
+                  <>
+                    {/* Transaction Cards - Classic Size */}
+                    <div className="space-y-2 mb-6">
+                      {paginatedTransactions.map((t, index) => (
+                        <div 
+                          key={t.id} 
+                          className="bg-white rounded-xl p-4 shadow-sm border border-gray-200 hover:shadow-md hover:border-red-200 transition-all duration-200 cursor-pointer"
+                          onClick={() => openTransactionDetails(t)}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                              {/* Transaction Icon */}
+                              <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center text-lg">
+                                {getTransactionIcon(t)}
+                              </div>
+                              
+                              {/* Transaction Details */}
+                              <div>
+                                <h4 className="font-semibold text-gray-900 text-sm">
+                                  {t.display_type || t.transaction_type}
+                                </h4>
+                                <p className="text-xs text-gray-500">
+                                  {formatDateTime(t.created_at)}
+                                </p>
+                                {t.description && (
+                                  <p className="text-xs text-gray-600 mt-0.5">
+                                    {t.description}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center space-x-3">
+                              {/* Amount */}
+                              <div className="text-right">
+                                <p className="text-base font-bold text-gray-900">
+                                  {t.amount} HTG
+                                </p>
+                                <div className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${getTransactionColor(t.status)}`}>
+                                  <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
+                                    t.status?.toLowerCase().includes('completed') || t.status?.toLowerCase().includes('success') || t.status?.toLowerCase().includes('konple') 
+                                      ? 'bg-green-500' 
+                                      : t.status?.toLowerCase().includes('pending') || t.status?.toLowerCase().includes('processing') || t.status?.toLowerCase().includes('ap tann')
+                                        ? 'bg-yellow-500'
+                                        : t.status?.toLowerCase().includes('failed') || t.status?.toLowerCase().includes('error') || t.status?.toLowerCase().includes('echwe')
+                                          ? 'bg-red-500'
+                                          : 'bg-gray-500'
+                                  }`}></div>
+                                  {t.status}
+                                </div>
+                              </div>
+                              
+                              {/* Arrow */}
+                              <div className="text-gray-400">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Pagination - Classic Size */}
+                    {totalPages > 1 && (
+                      <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs text-gray-600">
+                            Montre {((currentTransactionPage - 1) * transactionsPerPage) + 1} nan {Math.min(currentTransactionPage * transactionsPerPage, totalTransactions)} sou {totalTransactions} tranzaksyon
+                          </div>
+                          
+                          <div className="flex items-center space-x-1">
+                            <button
+                              onClick={() => setCurrentTransactionPage(Math.max(1, currentTransactionPage - 1))}
+                              disabled={currentTransactionPage === 1}
+                              className="px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs"
+                            >
+                              Anvan
+                            </button>
+                            
+                            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                              let pageNum
+                              if (totalPages <= 5) {
+                                pageNum = i + 1
+                              } else if (currentTransactionPage <= 3) {
+                                pageNum = i + 1
+                              } else if (currentTransactionPage >= totalPages - 2) {
+                                pageNum = totalPages - 4 + i
+                              } else {
+                                pageNum = currentTransactionPage - 2 + i
+                              }
+                              
+                              return (
+                                <button
+                                  key={pageNum}
+                                  onClick={() => setCurrentTransactionPage(pageNum)}
+                                  className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors ${
+                                    pageNum === currentTransactionPage
+                                      ? 'bg-red-600 text-white'
+                                      : 'border border-gray-300 text-gray-600 hover:bg-gray-50'
+                                  }`}
+                                >
+                                  {pageNum}
+                                </button>
+                              )
+                            })}
+                            
+                            <button
+                              onClick={() => setCurrentTransactionPage(Math.min(totalPages, currentTransactionPage + 1))}
+                              disabled={currentTransactionPage === totalPages}
+                              className="px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs"
+                            >
+                              Apre
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </div>
           )}
           {activeTab==='topup' && (
@@ -1230,32 +2926,76 @@ export default function ClientDashboard() {
                   {/* Profile Photo Section */}
                   <div className="flex items-center space-x-4">
                     <div className="w-20 h-20 bg-gray-200 rounded-full flex items-center justify-center overflow-hidden">
-                      {profilePhotoPreview ? (
-                        <img src={profilePhotoPreview} alt="Profil" className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-2xl text-gray-500">👤</span>
-                      )}
+                      {(() => {
+                        // Check for preview first (when user selects new photo)
+                        if (profilePhotoPreview) {
+                          return <img src={profilePhotoPreview} alt="Profil" className="w-full h-full object-cover" />
+                        }
+                        
+                        // Check for existing profile photo from user data
+                        const existingPhoto = (userData as any)?.profile?.profile_picture || 
+                                            (userData as any)?.profile?.photo || 
+                                            (userData as any)?.profile?.photo_url || 
+                                            (userData as any)?.user?.profile_picture || 
+                                            (userData as any)?.user?.photo_url || ''
+                        
+                        if (existingPhoto) {
+                          // Ensure the URL is complete
+                          const photoUrl = existingPhoto.startsWith('http') ? existingPhoto : `http://127.0.0.1:8000${existingPhoto}`
+                          return <img src={photoUrl} alt="Profil" className="w-full h-full object-cover" />
+                        }
+                        
+                        // Default avatar if no photo
+                        return <span className="text-2xl text-gray-500">👤</span>
+                      })()}
                     </div>
                     <div>
                       <h4 className="font-medium text-gray-900">{userData?.user?.first_name} {userData?.user?.last_name}</h4>
                       <p className="text-sm text-gray-500">{userData?.user?.email}</p>
-                      <label className="mt-2 bg-gray-100 text-gray-700 px-3 py-1 rounded text-sm cursor-pointer hover:bg-gray-200">
-                        📷 Chanje Foto
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0]
-                            if (file) {
-                              setProfilePhotoFile(file)
-                              const reader = new FileReader()
-                              reader.onload = (e) => setProfilePhotoPreview(e.target?.result as string)
-                              reader.readAsDataURL(file)
-                            }
-                          }}
-                        />
-                      </label>
+                      <div className="mt-3">
+                        <label className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm cursor-pointer transition-colors inline-flex items-center gap-2">
+                          📷 
+                          {selectedLanguage === 'kreyol' && 'Chanje Foto'}
+                          {selectedLanguage === 'french' && 'Changer Photo'}
+                          {selectedLanguage === 'english' && 'Change Photo'}
+                          {selectedLanguage === 'spanish' && 'Cambiar Foto'}
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0]
+                              if (file) {
+                                // Validate file size before setting
+                                const maxSize = 5 * 1024 * 1024; // 5MB
+                                if (file.size > maxSize) {
+                                  alert('❌ Foto a twò gwo. Li dwe pi piti pase 5MB.')
+                                  e.target.value = '' // Reset input
+                                  return
+                                }
+                                
+                                const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+                                if (!allowedTypes.includes(file.type.toLowerCase())) {
+                                  alert('❌ Tip fichye pa aksèpte. Tanpri chwazi JPG, PNG, GIF oswa WebP.')
+                                  e.target.value = '' // Reset input
+                                  return
+                                }
+
+                                setProfilePhotoFile(file)
+                                const reader = new FileReader()
+                                reader.onload = (e) => setProfilePhotoPreview(e.target?.result as string)
+                                reader.readAsDataURL(file)
+                              }
+                            }}
+                          />
+                        </label>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {selectedLanguage === 'kreyol' && 'JPG, PNG, GIF oswa WebP (maksimòm 5MB)'}
+                          {selectedLanguage === 'french' && 'JPG, PNG, GIF ou WebP (maximum 5MB)'}
+                          {selectedLanguage === 'english' && 'JPG, PNG, GIF or WebP (maximum 5MB)'}
+                          {selectedLanguage === 'spanish' && 'JPG, PNG, GIF o WebP (máximo 5MB)'}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
@@ -1536,6 +3276,26 @@ export default function ClientDashboard() {
                     <div className="flex gap-2">
                       <button
                         onClick={async () => {
+                          // Validate file before upload
+                          if (!profilePhotoFile) {
+                            alert('❌ Pa gen foto ki chwazi')
+                            return
+                          }
+
+                          // Check file size (max 5MB)
+                          const maxSize = 5 * 1024 * 1024; // 5MB
+                          if (profilePhotoFile.size > maxSize) {
+                            alert('❌ Foto a twò gwo. Li dwe pi piti pase 5MB.')
+                            return
+                          }
+
+                          // Check file type
+                          const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+                          if (!allowedTypes.includes(profilePhotoFile.type.toLowerCase())) {
+                            alert('❌ Tip fichye pa aksèpte. Tanpri chwazi JPG, PNG, GIF oswa WebP.')
+                            return
+                          }
+
                           setProfileLoading(true)
                           const token = localStorage.getItem('auth_token')
                           const formData = new FormData()
@@ -1551,16 +3311,22 @@ export default function ClientDashboard() {
                             })
                             
                             if (response.ok) {
+                              const data = await response.json()
                               alert('✅ Foto profil chanje ak siksè!')
                               setProfilePhotoFile(null)
+                              
+                              // Clear the preview since we'll use the server photo now
                               setProfilePhotoPreview('')
+                              
+                              // Refresh all data to get the updated profile photo
                               await refreshAll()
                             } else {
                               const error = await response.json()
-                              alert(`❌ Erè: ${error.error || 'Foto pa chanje'}`)
+                              alert(`❌ Erè: ${error.error || error.message || 'Foto pa chanje'}`)
                             }
                           } catch (error) {
-                            alert('❌ Erè nan koneksyon an')
+                            console.error('Upload error:', error)
+                            alert('❌ Erè nan koneksyon an. Tanpri eseye ankò.')
                           } finally {
                             setProfileLoading(false)
                           }
@@ -1855,6 +3621,140 @@ export default function ClientDashboard() {
               </div>
             </div>
           )}
+
+      {/* Add Recipient Modal */}
+      {showAddRecipient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">Ajoute Destinatè</h3>
+              <button
+                onClick={() => {
+                  setShowAddRecipient(false)
+                  setAddRecipientForm({ name: '', contact: '', contactType: 'phone', country: 'HT' })
+                }}
+                className="text-gray-400 hover:text-gray-600 text-xl"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <form onSubmit={(e) => { e.preventDefault(); addNewRecipient() }} className="space-y-4">
+              {/* Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Non Destinatè *</label>
+                <input
+                  type="text"
+                  value={addRecipientForm.name}
+                  onChange={(e) => setAddRecipientForm({...addRecipientForm, name: e.target.value})}
+                  placeholder="Antre non destinatè a"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  required
+                />
+              </div>
+
+              {/* Contact Type Selector */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Tip Kontak</label>
+                <div className="flex space-x-4">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="contactType"
+                      value="phone"
+                      checked={addRecipientForm.contactType === 'phone'}
+                      onChange={(e) => setAddRecipientForm({...addRecipientForm, contactType: e.target.value as 'phone' | 'email'})}
+                      className="mr-2 text-red-600"
+                    />
+                    <span className="text-sm">📞 Telefòn</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="contactType"
+                      value="email"
+                      checked={addRecipientForm.contactType === 'email'}
+                      onChange={(e) => setAddRecipientForm({...addRecipientForm, contactType: e.target.value as 'phone' | 'email'})}
+                      className="mr-2 text-red-600"
+                    />
+                    <span className="text-sm">📧 Email</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Country Selector - Show only for phone */}
+              {addRecipientForm.contactType === 'phone' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Peyi</label>
+                  <select
+                    value={addRecipientForm.country}
+                    onChange={(e) => setAddRecipientForm({...addRecipientForm, country: e.target.value, contact: ''})}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  >
+                    {countries.map((country) => (
+                      <option key={country.code} value={country.code}>
+                        {country.flag} {country.name} ({country.dialCode})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Contact Input */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {addRecipientForm.contactType === 'phone' ? 'Nimewo Telefòn' : 'Email'} *
+                </label>
+                <input
+                  type={addRecipientForm.contactType === 'email' ? 'email' : 'text'}
+                  value={addRecipientForm.contact}
+                  onChange={(e) => {
+                    if (addRecipientForm.contactType === 'phone') {
+                      const formatted = formatPhoneNumber(e.target.value, addRecipientForm.country)
+                      setAddRecipientForm({...addRecipientForm, contact: formatted})
+                    } else {
+                      setAddRecipientForm({...addRecipientForm, contact: e.target.value})
+                    }
+                  }}
+                  placeholder={
+                    addRecipientForm.contactType === 'phone' 
+                      ? countries.find(c => c.code === addRecipientForm.country)?.example || '+509 1234 5678'
+                      : 'email@example.com'
+                  }
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  required
+                />
+                {addRecipientForm.contactType === 'phone' && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Format: {countries.find(c => c.code === addRecipientForm.country)?.format}
+                  </p>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddRecipient(false)
+                    setAddRecipientForm({ name: '', contact: '', contactType: 'phone', country: 'HT' })
+                  }}
+                  className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+                >
+                  Anile
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 transition-colors"
+                >
+                  Ajoute
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* PIN Confirmation Modal */}
       {showPinModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
@@ -2592,10 +4492,12 @@ export default function ClientDashboard() {
                       <span className="text-gray-600">Telefòn:</span>
                       <span className="ml-2 font-medium">{selectedTransaction.sender_details?.phone}</span>
                     </div>
-                    <div>
-                      <span className="text-gray-600">Kont:</span>
-                      <span className="ml-2 font-medium font-mono text-xs">{selectedTransaction.sender_details?.account}</span>
-                    </div>
+                    {selectedTransaction.sender_details?.account && selectedTransaction.sender_details.account !== 'N/A' && (
+                      <div>
+                        <span className="text-gray-600">Kont:</span>
+                        <span className="ml-2 font-medium font-mono text-xs">{selectedTransaction.sender_details.account}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2612,9 +4514,15 @@ export default function ClientDashboard() {
                       <span className="ml-2 font-medium">{selectedTransaction.receiver_details?.phone}</span>
                     </div>
                     <div>
-                      <span className="text-gray-600">Kont:</span>
-                      <span className="ml-2 font-medium font-mono text-xs">{selectedTransaction.receiver_details?.account}</span>
+                      <span className="text-gray-600">Imèl:</span>
+                      <span className="ml-2 font-medium">{selectedTransaction.receiver_details?.email || 'N/A'}</span>
                     </div>
+                    {selectedTransaction.receiver_details?.account && selectedTransaction.receiver_details.account !== 'N/A' && (
+                      <div>
+                        <span className="text-gray-600">Kont:</span>
+                        <span className="ml-2 font-medium font-mono text-xs">{selectedTransaction.receiver_details.account}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

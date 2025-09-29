@@ -5,6 +5,10 @@ Cash Ti Machann - Digital Financial Services Platform
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -88,18 +92,32 @@ WSGI_APPLICATION = 'cash_ti_machann.wsgi.application'
 
 
 # Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+# Prefer environment variables. Default to SQLite in DEBUG to simplify local dev.
+# Set USE_SQLITE=0 and DB_* variables to use PostgreSQL locally.
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'cash_timachann_db',
-        'USER': 'postgres',
-        'PASSWORD': 'JCS823ch!!',
-        'HOST': 'localhost',
-        'PORT': '5432',
+USE_SQLITE = os.environ.get('USE_SQLITE')
+if USE_SQLITE is None:
+    # Default to SQLite when DEBUG for smoother onboarding
+    USE_SQLITE = '1' if DEBUG else '0'
+
+if USE_SQLITE == '1':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'cash_timachann_db'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+        }
+    }
 
 
 # Password validation

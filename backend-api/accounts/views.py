@@ -122,8 +122,15 @@ class AdminRecentActivityView(APIView):
             total_activities = len(activities)
             paginated_activities = activities[offset:offset + per_page]
             
-            # Remove internal ts before returning
-            trimmed = [{k: v for k, v in a.items() if k != 'ts'} for a in paginated_activities]
+            # Return a machine-readable timestamp as `timestamp` (unix seconds) while keeping existing fields
+            # for backward compatibility. This allows frontend to render in user's local timezone.
+            trimmed = [
+                {
+                    **{k: v for k, v in a.items() if k != 'ts'},
+                    'timestamp': a.get('ts')
+                }
+                for a in paginated_activities
+            ]
             
             return Response({
                 'activities': trimmed,
@@ -564,6 +571,14 @@ class ProfileView(APIView):
                 residence_country_code = profile.residence_country.iso2
                 residence_country_name = profile.residence_country.name
 
+            # Build absolute URL for profile picture if present
+            profile_picture_url = None
+            try:
+                if profile.profile_picture and hasattr(profile.profile_picture, 'url'):
+                    profile_picture_url = request.build_absolute_uri(profile.profile_picture.url)
+            except Exception:
+                profile_picture_url = None
+
             # Determine real last successful login: prefer user.last_login; fallback to latest successful LoginActivity
             real_last_login = user.last_login
             if not real_last_login:
@@ -597,6 +612,9 @@ class ProfileView(APIView):
                     'verification_status': profile.verification_status,
                     'is_email_verified': profile.is_email_verified,
                     'is_phone_verified': profile.is_phone_verified,
+                    # Persisted profile picture information
+                    'profile_picture_url': profile_picture_url,
+                    'preferred_language': getattr(profile, 'preferred_language', None),
                 },
                 'wallet': {
                     'balance': str(wallet.balance),
@@ -2331,12 +2349,13 @@ def search_users(request):
     if len(query) < 3:
         return Response([])
     
-    # Search by first name, last name, username, or phone number
+    # Search by first name, last name, username, phone number, or email
     users = User.objects.filter(
         Q(first_name__icontains=query) |
         Q(last_name__icontains=query) |
         Q(username__icontains=query) |
-        Q(phone_number__icontains=query),
+        Q(phone_number__icontains=query) |
+        Q(email__icontains=query),
         user_type='client',  # Only allow transfers to clients
         is_active=True
     ).exclude(
@@ -2345,12 +2364,21 @@ def search_users(request):
     
     results = []
     for user in users:
+        # Prefer profile names if available; fall back to User fields
+        try:
+            profile_first = getattr(user.profile, 'first_name', '') if hasattr(user, 'profile') else ''
+            profile_last = getattr(user.profile, 'last_name', '') if hasattr(user, 'profile') else ''
+        except Exception:
+            profile_first, profile_last = '', ''
+        full_name = f"{(profile_first or user.first_name or '').strip()} {(profile_last or user.last_name or '').strip()}".strip()
         results.append({
             'id': user.id,
             'first_name': user.first_name or '',
             'last_name': user.last_name or '',
             'username': user.username,
             'phone_number': user.phone_number or '',
+            'email': user.email or '',
+            'full_name': full_name,
             'user_type': user.user_type
         })
     
@@ -2423,6 +2451,12 @@ def pin_status(request):
 def generate_qr_code(request):
     """Generate QR code for receiving money"""
     try:
+        import qrcode
+        import json
+        import base64
+        from io import BytesIO
+        from django.utils import timezone
+        
         amount = request.data.get('amount', '')
         description = request.data.get('description', '')
         
@@ -2437,11 +2471,29 @@ def generate_qr_code(request):
             'timestamp': timezone.now().isoformat()
         }
         
-        import json
         qr_string = json.dumps(qr_data)
+        
+        # Generate QR code image
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_string)
+        qr.make(fit=True)
+        
+        # Create image
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Convert to base64
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        img_str = base64.b64encode(buffer.getvalue()).decode()
         
         return Response({
             'qr_data': qr_string,
+            'qr_image': img_str,
             'display_info': {
                 'name': qr_data['name'],
                 'phone': qr_data['phone'],
@@ -2452,6 +2504,52 @@ def generate_qr_code(request):
         
     except Exception as e:
         return Response({'error': f'Erè nan kreyasyon kòd QR: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def generate_personal_qr_code(request):
+    """Generate a personal QR that encodes the user's receiving identity (no amount/description)."""
+    try:
+        import qrcode
+        import json
+        import base64
+        from io import BytesIO
+        from django.utils import timezone
+
+        qr_data = {
+            'type': 'personal_receive',
+            'user_id': str(request.user.id),
+            'phone': request.user.phone_number,
+            'name': f"{request.user.first_name} {request.user.last_name}".strip(),
+            'timestamp': timezone.now().isoformat()
+        }
+        qr_string = json.dumps(qr_data)
+
+        # Generate QR image
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_string)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        img_str = base64.b64encode(buffer.getvalue()).decode()
+
+        return Response({
+            'qr_data': qr_string,
+            'qr_image': img_str,
+            'display_info': {
+                'name': qr_data['name'],
+                'phone': qr_data['phone']
+            }
+        })
+    except Exception as e:
+        return Response({'error': f'Erè nan kreyasyon kòd QR pèsonèl: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -2667,11 +2765,19 @@ def update_email(request):
         
         # Reset email verification
         try:
-            profile = request.user.userprofile
-            profile.is_email_verified = False
-            profile.save()
-        except:
-            pass
+            profile = request.user.profile
+        except Exception:
+            # Ensure profile exists if reverse relation missing
+            from .models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(
+                user=request.user,
+                defaults={
+                    'first_name': request.user.first_name or getattr(request.user, 'username', 'User'),
+                    'last_name': request.user.last_name or ''
+                }
+            )
+        profile.is_email_verified = False
+        profile.save()
         
         return Response({
             'success': True,
@@ -2707,11 +2813,18 @@ def update_phone(request):
         
         # Reset phone verification
         try:
-            profile = request.user.userprofile
-            profile.is_phone_verified = False
-            profile.save()
-        except:
-            pass
+            profile = request.user.profile
+        except Exception:
+            from .models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(
+                user=request.user,
+                defaults={
+                    'first_name': request.user.first_name or getattr(request.user, 'username', 'User'),
+                    'last_name': request.user.last_name or ''
+                }
+            )
+        profile.is_phone_verified = False
+        profile.save()
         
         return Response({
             'success': True,
@@ -2766,6 +2879,59 @@ def change_password(request):
     except Exception as e:
         return Response({'error': f'Erè nan chanjman modpas: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def get_user_profile(request):
+    """Get or update complete user profile information including profile picture"""
+    try:
+        from .serializers import UserProfileSerializer, UserSerializer
+        from .models import UserProfile
+        
+        # Get or create user profile
+        try:
+            profile = request.user.profile
+        except (UserProfile.DoesNotExist, AttributeError):
+            # Create profile with basic info if it doesn't exist
+            first_name = getattr(request.user, 'first_name', '') or getattr(request.user, 'username', 'User')
+            last_name = getattr(request.user, 'last_name', '') or ''
+            profile, _ = UserProfile.objects.get_or_create(
+                user=request.user,
+                defaults={
+                    'first_name': first_name,
+                    'last_name': last_name,
+                }
+            )
+        
+        if request.method == 'GET':
+            # Get profile information
+            user_serializer = UserSerializer(request.user)
+            profile_serializer = UserProfileSerializer(profile, context={'request': request})
+            
+            return Response({
+                'success': True,
+                'user': user_serializer.data,
+                'profile': profile_serializer.data
+            })
+            
+        elif request.method == 'PUT':
+            # Update profile information
+            serializer = UserProfileSerializer(profile, data=request.data, context={'request': request}, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({
+                    'success': True,
+                    'message': 'Profil modifye ak siksè',
+                    'profile': serializer.data
+                })
+            else:
+                return Response({
+                    'success': False,
+                    'errors': serializer.errors
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+    except Exception as e:
+        return Response({'error': f'Erè nan jesyon profil: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def upload_profile_photo(request):
@@ -2785,12 +2951,20 @@ def upload_profile_photo(request):
         if profile_picture.content_type not in allowed_types:
             return Response({'error': 'Tip fichye pa valab (sèlman JPEG, PNG, GIF)'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get or create user profile
+        # Get or create user profile (ensure required fields are populated)
+        from .models import UserProfile
         try:
-            profile = request.user.userprofile
-        except:
-            from .models import UserProfile
-            profile = UserProfile.objects.create(user=request.user)
+            profile = request.user.profile  # type: ignore[attr-defined]
+        except (UserProfile.DoesNotExist, AttributeError):
+            first_name = getattr(request.user, 'first_name', '') or getattr(request.user, 'username', 'User')
+            last_name = getattr(request.user, 'last_name', '') or ''
+            profile, _ = UserProfile.objects.get_or_create(
+                user=request.user,
+                defaults={
+                    'first_name': first_name,
+                    'last_name': last_name,
+                }
+            )
         
         # Save the profile picture
         profile.profile_picture = profile_picture
@@ -2819,7 +2993,7 @@ def update_language(request):
         
         # Get or create user profile
         try:
-            profile = request.user.userprofile
+            profile = request.user.profile
         except (UserProfile.DoesNotExist, AttributeError):
             # Handle both missing profile and missing relationship
             profile, created = UserProfile.objects.get_or_create(
@@ -2863,7 +3037,7 @@ def get_user_language(request):
     try:
         # Get user profile
         try:
-            profile = request.user.userprofile
+            profile = request.user.profile
             language = profile.preferred_language or 'kreyol'
         except (UserProfile.DoesNotExist, AttributeError):
             # Try to get profile directly if relationship doesn't work

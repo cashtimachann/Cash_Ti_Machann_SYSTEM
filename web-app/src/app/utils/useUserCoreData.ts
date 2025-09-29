@@ -25,6 +25,7 @@ export interface CoreUserData {
     verification_status?: string
     is_email_verified?: boolean
     is_phone_verified?: boolean
+    profile_picture_url?: string | null
   }
 }
 

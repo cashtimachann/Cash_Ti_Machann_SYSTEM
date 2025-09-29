@@ -1,8 +1,8 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
 import './globals.css'
 
-const inter = Inter({ subsets: ['latin'] })
+// Using system fonts temporarily to avoid Google Fonts issues
+const systemFonts = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
 
 export const metadata: Metadata = {
   title: 'Cash Ti Machann - Digital Financial Services',
@@ -21,7 +21,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="fr">
-      <body className={`${inter.className} w-full`}>
+      <body className="w-full" style={{ fontFamily: systemFonts }}>
         <div className="min-h-screen bg-gray-50 w-full">
           {children}
         </div>

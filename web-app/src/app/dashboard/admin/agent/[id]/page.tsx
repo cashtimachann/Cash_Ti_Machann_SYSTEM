@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import BackButton from '@/app/components/BackButton'
+import { formatDateTimeLocal } from '@/utils/datetime'
 
 interface Agent {
   id: string
@@ -210,7 +211,7 @@ export default function AgentDetails() {
   }
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-HT', {
+    return formatDateTimeLocal(dateString, {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
@@ -449,7 +450,7 @@ export default function AgentDetails() {
                     <label className="block text-sm font-medium text-gray-500">Dat Nesans</label>
                     <p className="mt-1 text-sm text-gray-900">
                       {agent.profile?.date_of_birth ? 
-                        new Date(agent.profile.date_of_birth).toLocaleDateString() : 
+                        formatDateTimeLocal(agent.profile.date_of_birth, { year: 'numeric', month: '2-digit', day: '2-digit' }) : 
                         'Pa gen'
                       }
                     </p>
@@ -501,7 +502,7 @@ export default function AgentDetails() {
                     <label className="block text-sm font-medium text-gray-500">Dènye Koneksyon</label>
                     <p className="mt-1 text-sm text-gray-900">
                       {agent.last_login ? (
-                        <span title={new Date(agent.last_login).toLocaleString('fr-HT')}>
+                        <span title={formatDateTimeLocal(agent.last_login)}>
                           {formatTimeAgo(agent.last_login)}
                         </span>
                       ) : 'Jamè konekte'}
@@ -561,7 +562,9 @@ export default function AgentDetails() {
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {formatTimeAgo(transaction.created_at)}
+                            <span title={formatDateTimeLocal(transaction.created_at)}>
+                              {formatTimeAgo(transaction.created_at)}
+                            </span>
                           </td>
                         </tr>
                       ))}
