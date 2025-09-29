@@ -4,7 +4,8 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUserCoreData, formatTimeAgo } from '../../utils/useUserCoreData'
 import { formatDateTimeLocal } from '@/utils/datetime'
-import { Menu, QrCode, FileText, CreditCard, Receipt, Phone, Wallet, Zap, BarChart3, TrendingUp, DollarSign } from 'lucide-react'
+import { Menu, QrCode, FileText, CreditCard, Receipt, Phone, Wallet, Zap, BarChart3, TrendingUp, DollarSign, Eye, EyeOff, HelpCircle, PhoneCall, MessageCircle, Percent } from 'lucide-react'
+import { BrowserQRCodeReader } from '@zxing/browser'
 
 // Function to format date and time (local timezone, single render)
 const formatDateTime = (dateString: string): string => {
@@ -82,6 +83,7 @@ export default function ClientDashboard() {
   const [showHeaderMenu, setShowHeaderMenu] = useState(false)
   const headerMenuRef = useRef<HTMLDivElement | null>(null)
   const [showInactivityWarning, setShowInactivityWarning] = useState(false)
+  const [showBalance, setShowBalance] = useState(false)
   const inactivityTimer = useRef<NodeJS.Timeout | null>(null)
   const warningTimer = useRef<NodeJS.Timeout | null>(null)
   const [loadingRedirect, setLoadingRedirect] = useState(true)
@@ -347,11 +349,20 @@ export default function ClientDashboard() {
   })
   
   // QR Code states
-  const [qrMode, setQrMode] = useState<'generate' | 'scan'>('generate')
+  const [qrMode, setQrMode] = useState<'generate' | 'scan'>('scan')
   const [qrForm, setQrForm] = useState({ amount: '', description: '' })
   const [qrCode, setQrCode] = useState('')
   const [qrImage, setQrImage] = useState('')
   const [qrDisplayInfo, setQrDisplayInfo] = useState<any>(null)
+  // Support form state
+  const [supportForm, setSupportForm] = useState({ name: '', email: '', topic: 'general', message: '' })
+  const [supportSending, setSupportSending] = useState(false)
+  // Personal QR states
+  const [personalQrImage, setPersonalQrImage] = useState<string>('')
+  const [personalQrData, setPersonalQrData] = useState<string>('')
+  const [personalQrInfo, setPersonalQrInfo] = useState<any>(null)
+  const [personalQrLoading, setPersonalQrLoading] = useState<boolean>(false)
+  const [personalQrError, setPersonalQrError] = useState<string | null>(null)
   const [scannedData, setScannedData] = useState('')
   const [cameraActive, setCameraActive] = useState(false)
   const [scannerError, setScannerError] = useState('')
@@ -1308,7 +1319,7 @@ export default function ClientDashboard() {
     
     // Check if user has PIN
     if (!pinStatus?.has_pin) {
-      alert('Ou pa gen PIN. Tanpri konfigire yon PIN nan paramèt yo anvan w peye faktè')
+      alert('Ou pa gen PIN. Tanpri konfigire yon PIN nan paramèt yo anvan w peye fakti')
       setActiveTab('settings')
       return
     }
@@ -1340,7 +1351,7 @@ export default function ClientDashboard() {
       
       if (response.ok) {
         const result = await response.json()
-        alert(`✅ Faktè peye ak siksè! Referans: ${result.transaction?.reference_number}`)
+        alert(`✅ Fakti peye ak siksè! Referans: ${result.transaction?.reference_number}`)
         setBillForm({ billType: 'electricity', serviceProvider: 'EDH', accountNumber: '', amount: '' })
         await refreshAll()
       } else {
@@ -1351,6 +1362,44 @@ export default function ClientDashboard() {
       alert('❌ Erè nan koneksyon an')
     }
   }
+
+  // Personal QR functions
+  const fetchPersonalQRCode = async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+    if (!token) return
+    try {
+      setPersonalQrLoading(true)
+      setPersonalQrError(null)
+      const response = await fetch('http://127.0.0.1:8000/api/auth/qr/personal/', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Token ${token}`,
+        },
+      })
+      if (response.ok) {
+        const result = await response.json()
+        setPersonalQrData(result.qr_data || '')
+        setPersonalQrImage(result.qr_image || '')
+        setPersonalQrInfo(result.display_info || null)
+      } else {
+        const error = await response.json()
+        setPersonalQrError(error.error || 'Pa ka chaje kòd QR pèsonèl la')
+      }
+    } catch (e) {
+      setPersonalQrError('Erè rezo pandan chajman kòd QR pèsonèl la')
+    } finally {
+      setPersonalQrLoading(false)
+    }
+  }
+
+  // Auto-load personal QR when opening the QR tab
+  useEffect(() => {
+    if (activeTab === 'qr' && !personalQrImage && !personalQrLoading) {
+      fetchPersonalQRCode()
+    }
+  }, [activeTab])
+
+  // Note: pa demare kamera otomatik; itilizatè a dwe klike 'Ouvri Kamera'.
 
   // QR Code functions
   const generateQRCode = async () => {
@@ -1385,6 +1434,26 @@ export default function ClientDashboard() {
       }
     } catch (error) {
       alert('❌ Erè nan koneksyon an')
+    }
+  }
+
+  // Simple support submit placeholder
+  const submitSupport = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!supportForm.name || !supportForm.email || !supportForm.message) {
+      alert('Tanpri ranpli non, email ak mesaj ou.')
+      return
+    }
+    try {
+      setSupportSending(true)
+      // TODO: call backend support endpoint when available
+      await new Promise(r => setTimeout(r, 800))
+      alert('Mèsi! Mesaj ou voye. Nou pral kontakte ou byento.')
+      setSupportForm({ name: '', email: '', topic: 'general', message: '' })
+    } catch (e) {
+      alert('Pa rive voye mesaj la. Eseye ankò.')
+    } finally {
+      setSupportSending(false)
     }
   }
 
@@ -1425,34 +1494,19 @@ export default function ClientDashboard() {
     setCameraActive(false)
   }
 
-  const scanQRFromCamera = () => {
-    const video = document.getElementById('qr-video') as HTMLVideoElement
-    const canvas = document.getElementById('qr-canvas') as HTMLCanvasElement
-    const context = canvas.getContext('2d')
-    
-    if (video && canvas && context) {
-      // Capturer l'image de la vidéo
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      context.drawImage(video, 0, 0)
-      
-      // Pour un vrai scanner QR, vous utiliseriez une bibliothèque comme jsQR
-      // Pour le moment, on simule avec un placeholder
-      alert('🔍 Fonksyon eskane QR ap vini pwochennman. Pou kounye a, sèvi ak done manual yo.')
-      
-      // Exemple de données QR pour test
-      const testQRData = `{
-        "type": "payment_request",
-        "user_id": "2",
-        "phone": "+509 8765 4321",
-        "name": "Test Receiver",
-        "amount": "250",
-        "description": "Test payment from QR scan",
-        "timestamp": "${new Date().toISOString()}"
-      }`
-      
-      setScannedData(testQRData)
-      stopCamera()
+  const scanQRFromCamera = async () => {
+    try {
+      const codeReader = new BrowserQRCodeReader()
+      const result = await codeReader.decodeOnceFromVideoDevice(undefined, 'qr-video')
+      const text = result?.getText?.() || (typeof result === 'string' ? result : '')
+      if (text) {
+        setScannedData(text)
+        stopCamera()
+        await processQRPayment()
+      }
+    } catch (err) {
+      console.error('QR scan error:', err)
+      setScannerError('Pa ka li kòd QR la. Eseye ankò.')
     }
   }
 
@@ -1767,6 +1821,30 @@ export default function ClientDashboard() {
                     <Receipt size={18} className={activeTab==='agents' ? 'text-red-600' : ''} />
                     <span className="font-medium">Retire nan Ajan</span>
                   </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('fees'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='fees' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <Percent size={18} className={activeTab==='fees' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Frè & Limit</span>
+                  </button>
+
+                  <button 
+                    onClick={() => { setActiveTab('support'); setIsSidebarOpen(false) }} 
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-all duration-200 ${
+                      activeTab==='support' 
+                        ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-red-600'
+                    }`}
+                  >
+                    <HelpCircle size={18} className={activeTab==='support' ? 'text-red-600' : ''} />
+                    <span className="font-medium">Sipò Kliyan</span>
+                  </button>
                 </div>
               </div>
 
@@ -1837,12 +1915,6 @@ export default function ClientDashboard() {
                       </p>
                     </div>
                   </div>
-                  <button 
-                    onClick={() => setActiveTab('settings')} 
-                    className="text-gray-600 hover:text-red-600 self-start sm:self-center bg-gray-50 hover:bg-red-50 px-3 py-2 rounded-lg transition-all duration-200 border border-gray-200 hover:border-red-200"
-                  >
-                    <span className="text-sm font-medium">Mizajou Profil</span>
-                  </button>
                 </div>
 
                 {/* Enhanced Verification Badge */}
@@ -1879,17 +1951,30 @@ export default function ClientDashboard() {
               {/* Enhanced Balance Card - Classic Size */}
               <div className="bg-gradient-to-br from-green-600 via-green-700 to-green-800 rounded-xl p-5 lg:p-6 text-white mb-6 relative overflow-hidden shadow-lg">
                 <div className="relative z-10">
-                  <p className="text-green-100 text-xs font-medium mb-2 uppercase tracking-wider">
-                    Balans Wallet Ou
-                  </p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-green-100 text-xs font-medium uppercase tracking-wider">
+                      Balans Wallet Ou
+                    </p>
+                    <button
+                      onClick={() => setShowBalance(!showBalance)}
+                      className="bg-green-500 bg-opacity-20 hover:bg-opacity-30 rounded-lg p-2 transition-all duration-200 backdrop-blur-sm"
+                      title={showBalance ? 'Kache balans la' : 'Montre balans la'}
+                    >
+                      {showBalance ? (
+                        <EyeOff className="text-green-100" size={16} />
+                      ) : (
+                        <Eye className="text-green-100" size={16} />
+                      )}
+                    </button>
+                  </div>
                   <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-1 tracking-tight">
-                    {userData?.wallet?.balance ?? 0}
+                    {showBalance ? (userData?.wallet?.balance ?? 0) : '••••••'}
                   </div>
                   <p className="text-green-50 text-base font-medium">
                     {userData?.wallet?.currency ?? 'HTG'}
                   </p>
                 </div>
-                <div className="absolute top-4 right-4 w-10 h-10 lg:w-12 lg:h-12 bg-green-500 bg-opacity-20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+                <div className="absolute top-4 right-16 w-10 h-10 lg:w-12 lg:h-12 bg-green-500 bg-opacity-20 rounded-xl flex items-center justify-center backdrop-blur-sm">
                   <DollarSign className="text-green-200" size={20} />
                 </div>
                 <div className="absolute -right-6 -bottom-6 w-20 h-20 lg:w-24 lg:h-24 bg-green-500 bg-opacity-10 rounded-full blur-xl"></div>
@@ -1897,10 +1982,14 @@ export default function ClientDashboard() {
               </div>
 
               {/* Enhanced Stats Cards - Classic Size */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-5 mb-8">
-                <div className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 lg:gap-5 mb-8">
+                {/* 1st Card: Transactions - Click to go to transactions page */}
+                <div 
+                  onClick={() => setActiveTab('transactions')}
+                  className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md hover:border-blue-300 cursor-pointer transition-all duration-200 group"
+                >
                   <div className="flex items-center justify-between mb-3">
-                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-blue-50 rounded-xl flex items-center justify-center">
+                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-blue-50 rounded-xl flex items-center justify-center group-hover:bg-blue-100 transition-colors">
                       <BarChart3 className="text-blue-600" size={20} />
                     </div>
                     <div className="text-right">
@@ -1910,48 +1999,80 @@ export default function ClientDashboard() {
                       <p className="text-xs text-gray-500 font-medium">Tranzaksyon</p>
                     </div>
                   </div>
-                  <p className="text-gray-600 text-sm font-medium">Tranzaksyon Mwa Sa a</p>
+                  <p className="text-gray-600 text-sm font-medium group-hover:text-blue-600 transition-colors">Tranzaksyon Mwa Sa a</p>
                   <div className="mt-2 flex items-center">
                     <div className="w-full bg-blue-100 rounded-full h-1.5">
-                      <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: '75%' }}></div>
+                      <div className="bg-blue-600 h-1.5 rounded-full group-hover:bg-blue-700 transition-colors" style={{ width: '75%' }}></div>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200">
+                {/* 2nd Card: QR Code - Click to show unique QR code */}
+                <div 
+                  onClick={() => setActiveTab('qr')}
+                  className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md hover:border-green-300 cursor-pointer transition-all duration-200 group"
+                >
                   <div className="flex items-center justify-between mb-3">
-                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-green-50 rounded-xl flex items-center justify-center">
-                      <DollarSign className="text-green-600" size={20} />
+                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-green-50 rounded-xl flex items-center justify-center group-hover:bg-green-100 transition-colors">
+                      <QrCode className="text-green-600" size={20} />
                     </div>
                     <div className="text-right">
-                      <p className="text-xl lg:text-2xl font-bold text-gray-900">
-                        {(stats?.balance ?? userData?.wallet?.balance ?? 0)}
-                      </p>
-                      <p className="text-xs text-gray-500 font-medium">{userData?.wallet?.currency ?? 'HTG'}</p>
+                      <p className="text-xl lg:text-2xl font-bold text-gray-900">QR</p>
+                      <p className="text-xs text-gray-500 font-medium">Kòd</p>
                     </div>
                   </div>
-                  <p className="text-gray-600 text-sm font-medium">Balans Total</p>
+                  <p className="text-gray-600 text-sm font-medium group-hover:text-green-600 transition-colors">Kòd QR Ou</p>
                   <div className="mt-2 flex items-center">
                     <div className="w-full bg-green-100 rounded-full h-1.5">
-                      <div className="bg-green-600 h-1.5 rounded-full" style={{ width: '90%' }}></div>
+                      <div className="bg-green-600 h-1.5 rounded-full group-hover:bg-green-700 transition-colors" style={{ width: '100%' }}></div>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200 sm:col-span-2 xl:col-span-1">
+                {/* 3rd Card: Bill Payment - Click to go to bills page */}
+                <div 
+                  onClick={() => setActiveTab('bills')}
+                  className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md hover:border-purple-300 cursor-pointer transition-all duration-200 group"
+                >
                   <div className="flex items-center justify-between mb-3">
-                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-purple-50 rounded-xl flex items-center justify-center">
-                      <Zap className="text-purple-600" size={20} />
+                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-purple-50 rounded-xl flex items-center justify-center group-hover:bg-purple-100 transition-colors">
+                      <svg className="text-purple-600 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
                     </div>
                     <div className="text-right">
-                      <p className="text-2xl lg:text-3xl font-bold text-gray-900">5</p>
-                      <p className="text-xs text-gray-500 font-medium">Disponib</p>
+                      <p className="text-2xl lg:text-3xl font-bold text-gray-900">Fakti</p>
+                      <p className="text-xs text-gray-500 font-medium">Peye</p>
                     </div>
                   </div>
-                  <p className="text-gray-600 text-sm font-medium">Aksyon Rapid</p>
+                  <p className="text-gray-600 text-sm font-medium group-hover:text-purple-600 transition-colors">Peye Fakti</p>
                   <div className="mt-2 flex items-center">
                     <div className="w-full bg-purple-100 rounded-full h-1.5">
-                      <div className="bg-purple-600 h-1.5 rounded-full" style={{ width: '100%' }}></div>
+                      <div className="bg-purple-600 h-1.5 rounded-full group-hover:bg-purple-700 transition-colors" style={{ width: '90%' }}></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4th Card: Top Up - Click to go to topup page */}
+                <div 
+                  onClick={() => setActiveTab('topup')}
+                  className="bg-white rounded-xl p-4 lg:p-5 shadow-sm border border-gray-200 hover:shadow-md hover:border-orange-300 cursor-pointer transition-all duration-200 group"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="w-10 h-10 lg:w-12 lg:h-12 bg-orange-50 rounded-xl flex items-center justify-center group-hover:bg-orange-100 transition-colors">
+                      <svg className="text-orange-600 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl lg:text-3xl font-bold text-gray-900">Minit</p>
+                      <p className="text-xs text-gray-500 font-medium">Top Up</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-600 text-sm font-medium group-hover:text-orange-600 transition-colors">Voye Minit</p>
+                  <div className="mt-2 flex items-center">
+                    <div className="w-full bg-orange-100 rounded-full h-1.5">
+                      <div className="bg-orange-600 h-1.5 rounded-full group-hover:bg-orange-700 transition-colors" style={{ width: '85%' }}></div>
                     </div>
                   </div>
                 </div>
@@ -2241,6 +2362,58 @@ export default function ClientDashboard() {
           {activeTab==='qr' && (
             <div>
               <h2 className="text-2xl font-bold text-gray-900 mb-6">Kòd QR</h2>
+
+              {/* Personal QR (auto) */}
+              <div className="bg-white p-6 rounded-lg shadow-sm border max-w-md mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-green-50 rounded-lg flex items-center justify-center">
+                      <QrCode className="text-green-600" size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-semibold text-gray-900">Kòd QR Pèsonèl Ou</h3>
+                      <p className="text-xs text-gray-500">Sèvi ak kòd sa a pou moun peye w fasil</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={fetchPersonalQRCode}
+                    className="text-xs bg-gray-50 hover:bg-red-50 text-gray-600 hover:text-red-600 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-red-200"
+                  >
+                    Mizajou
+                  </button>
+                </div>
+                {personalQrLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-500">
+                    <div className="animate-spin h-4 w-4 border-2 border-red-600 border-t-transparent rounded-full" />
+                    Ap chaje kòd la...
+                  </div>
+                ) : personalQrError ? (
+                  <div className="text-sm text-red-600">{personalQrError}</div>
+                ) : personalQrImage ? (
+                  <div className="flex items-center gap-4">
+                    <div className="bg-white p-3 rounded border inline-block">
+                      <img
+                        src={`data:image/png;base64,${personalQrImage}`}
+                        alt="Kòd QR pèsonèl"
+                        className="w-40 h-40 object-contain"
+                      />
+                    </div>
+                    <div className="text-sm text-gray-700">
+                      {personalQrInfo?.name && (
+                        <p className="font-medium text-gray-900">{personalQrInfo.name}</p>
+                      )}
+                      {personalQrInfo?.phone && (
+                        <p className="text-gray-600">{personalQrInfo.phone}</p>
+                      )}
+                      <p className="text-xs text-gray-400 mt-2">
+                        Montre kòd sa a bay moun ki ap peye a pou yo eskane li
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500">Pa gen kòd QR pou kounye a.</div>
+                )}
+              </div>
               
               {/* QR Mode Toggle */}
               <div className="flex mb-6 bg-gray-100 rounded-lg p-1 max-w-md">
@@ -2389,6 +2562,12 @@ export default function ClientDashboard() {
                               Eskane Kòd
                             </button>
                             <button
+                              onClick={() => { setScannerError(''); scanQRFromCamera() }}
+                              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                            >
+                              Re-eskane
+                            </button>
+                            <button
                               onClick={stopCamera}
                               className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
                             >
@@ -2399,30 +2578,7 @@ export default function ClientDashboard() {
                       )}
                     </div>
 
-                    {/* Manual Input */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Done Kòd QR</label>
-                      <textarea
-                        value={scannedData}
-                        onChange={(e) => setScannedData(e.target.value)}
-                        placeholder="Kole done kòd QR isit la oswa sèvi ak kamera a"
-                        className="w-full border rounded px-3 py-2 text-sm h-24"
-                      />
-                    </div>
-
-                    <button
-                      onClick={processQRPayment}
-                      disabled={!scannedData}
-                      className="w-full bg-primary-600 text-white py-2 px-4 rounded hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                      Peye ak Kòd QR
-                    </button>
-
-                    <div className="bg-blue-50 border border-blue-200 rounded p-3">
-                      <p className="text-xs text-blue-800">
-                        💡 Pou teste: Kreye yon kòd QR nan tab "Kreye Kòd" ak kole done yo isit la
-                      </p>
-                    </div>
+                    {/* Retire kole done QR - nou itilize kamera sèlman */}
                   </div>
                 </div>
               )}
@@ -2430,12 +2586,12 @@ export default function ClientDashboard() {
           )}
           {activeTab==='bills' && (
             <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Peye Faktè</h2>
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">Peye Fakti</h2>
               <div className="bg-white p-6 rounded-lg shadow-sm border max-w-md">
                 <form onSubmit={handleBillPayment} className="space-y-4">
                   {/* Bill Type */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Tip Faktè</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Tip Fakti</label>
                     <select
                       value={billForm.billType}
                       onChange={(e) => setBillForm({...billForm, billType: e.target.value, serviceProvider: e.target.value === 'electricity' ? 'EDH' : e.target.value === 'water' ? 'DINEPA' : 'Natcom'})}
@@ -2532,7 +2688,7 @@ export default function ClientDashboard() {
                     disabled={!billForm.accountNumber || !billForm.amount}
                     className="w-full bg-primary-600 text-white py-2 px-4 rounded hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                   >
-                    Peye Faktè
+                    Peye Fakti
                   </button>
                 </form>
               </div>
@@ -2868,6 +3024,109 @@ export default function ClientDashboard() {
                   <button type="button" onClick={()=>refreshAll()} className="text-xs text-gray-500 hover:underline">Refresh</button>
                 </div>
               </form>
+            </div>
+          )}
+          {activeTab==='fees' && (
+            <div className="max-w-4xl mx-auto">
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">Frè & Limit</h2>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-0">
+                  <div className="p-6 border-b md:border-b-0 md:border-r border-gray-200">
+                    <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Percent className="text-red-600" size={18}/> Frè Tranzaksyon</h3>
+                    <ul className="space-y-2 text-sm text-gray-700">
+                      <li className="flex justify-between"><span>P2P voye lajan</span><span className="font-medium">1.0%</span></li>
+                      <li className="flex justify-between"><span>Peye machann</span><span className="font-medium">0.5%</span></li>
+                      <li className="flex justify-between"><span>Peye faktè</span><span className="font-medium">0.5%</span></li>
+                      <li className="flex justify-between"><span>Top up minit</span><span className="font-medium">Gratis</span></li>
+                      <li className="flex justify-between"><span>Retire lajan lakay ajan</span><span className="font-medium">1.5% + 10 HTG</span></li>
+                    </ul>
+                    <p className="text-xs text-gray-500 mt-3">Nòt: Frè yo ka chanje selon kondisyon mache a. N ap toujou afiche dènye mizajou yo.</p>
+                  </div>
+                  <div className="p-6">
+                    <h3 className="font-semibold text-gray-900 mb-3">Limit Tranzaksyon</h3>
+                    <ul className="space-y-2 text-sm text-gray-700">
+                      <li className="flex justify-between"><span>Transfè P2P</span><span className="font-medium">Min: 10 HTG — Max: 100,000 HTG</span></li>
+                      <li className="flex justify-between"><span>Peman Machann</span><span className="font-medium">Min: 10 HTG — Max: 250,000 HTG</span></li>
+                      <li className="flex justify-between"><span>Peye Faktè</span><span className="font-medium">Min: 50 HTG — Max: 200,000 HTG</span></li>
+                      <li className="flex justify-between"><span>Top Up</span><span className="font-medium">Min: 10 HTG — Max: 10,000 HTG</span></li>
+                      <li className="flex justify-between"><span>Retire nan Ajan</span><span className="font-medium">Min: 100 HTG — Max: 150,000 HTG</span></li>
+                    </ul>
+                    <p className="text-xs text-gray-500 mt-3">Pou limit pi wo, tanpri fini verifikasyon KYC/KYB ou.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {activeTab==='support' && (
+            <div className="max-w-5xl mx-auto">
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">Sipò Kliyan</h2>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                  <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2"><MessageCircle className="text-red-600" size={18}/> Voye yon mesaj</h3>
+                  <form onSubmit={submitSupport} className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Non ou</label>
+                        <input className="w-full border rounded-lg px-3 py-2" value={supportForm.name} onChange={e=>setSupportForm({...supportForm, name:e.target.value})} required />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <input type="email" className="w-full border rounded-lg px-3 py-2" value={supportForm.email} onChange={e=>setSupportForm({...supportForm, email:e.target.value})} required />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Sijè</label>
+                      <select className="w-full border rounded-lg px-3 py-2" value={supportForm.topic} onChange={e=>setSupportForm({...supportForm, topic:e.target.value})}>
+                        <option value="general">Jeneral</option>
+                        <option value="payments">Peman</option>
+                        <option value="account">Kont</option>
+                        <option value="security">Sekirite</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Mesaj</label>
+                      <textarea className="w-full border rounded-lg px-3 py-2 h-28" value={supportForm.message} onChange={e=>setSupportForm({...supportForm, message:e.target.value})} required />
+                    </div>
+                    <button type="submit" disabled={supportSending} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg">
+                      {supportSending ? 'Ap voye...' : 'Voye Mesaj'}
+                    </button>
+                  </form>
+                </div>
+                <div className="space-y-6">
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><PhoneCall className="text-red-600" size={18}/> Kontakte Nou</h3>
+                    <ul className="text-sm text-gray-700 space-y-2">
+                      <li><span className="font-medium">Telefòn:</span> +509 5555 0000</li>
+                      <li><span className="font-medium">Orè:</span> Lendi - Samdi, 8am - 6pm</li>
+                      <li><span className="font-medium">Imèl:</span> support@cashtimachann.ht</li>
+                    </ul>
+                    <a
+                      href="https://wa.me/50955550000"
+                      target="_blank"
+                      className="mt-4 inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg"
+                    >
+                      <MessageCircle size={18}/> Chat WhatsApp
+                    </a>
+                  </div>
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    <h3 className="font-semibold text-gray-900 mb-3">FAQ</h3>
+                    <div className="space-y-3 text-sm text-gray-700">
+                      <details className="border rounded-lg p-3">
+                        <summary className="font-medium cursor-pointer">Kijan pou m verifye kont mwen?</summary>
+                        <p className="mt-2 text-gray-600">Ale nan Paramèt → Verifikasyon epi swiv etap yo pou telechaje dokiman yo.</p>
+                      </details>
+                      <details className="border rounded-lg p-3">
+                        <summary className="font-medium cursor-pointer">Kijan pou m voye lajan?</summary>
+                        <p className="mt-2 text-gray-600">Chwazi “Voye Lajan”, antre detay yo, epi konfime ak PIN ou.</p>
+                      </details>
+                      <details className="border rounded-lg p-3">
+                        <summary className="font-medium cursor-pointer">PIN mwen bloke, kisa pou m fè?</summary>
+                        <p className="mt-2 text-gray-600">Ale nan Paramèt → Sekirite PIN pou rekipere oswa reinitialise.</p>
+                      </details>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
           {activeTab==='settings' && (
@@ -4139,7 +4398,7 @@ export default function ClientDashboard() {
                 </div>
 
                 <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-                  <h3 className="text-lg font-semibold mb-4">📄 Peye Faktè Machann</h3>
+                  <h3 className="text-lg font-semibold mb-4">📄 Peye Fakti Machann</h3>
                   <form onSubmit={async (e) => {
                     e.preventDefault()
                     if (!merchantForm.merchantCode || !merchantForm.amount) {

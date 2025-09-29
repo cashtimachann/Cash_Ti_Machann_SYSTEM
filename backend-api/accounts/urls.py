@@ -59,6 +59,7 @@ urlpatterns = [
     
     # QR Code payments
     path('qr/generate/', views.generate_qr_code, name='generate_qr_code'),
+    path('qr/personal/', views.generate_personal_qr_code, name='generate_personal_qr_code'),
     path('qr/process/', views.process_qr_payment, name='process_qr_payment'),
     
     # Security features
